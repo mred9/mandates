@@ -178,3 +178,14 @@ and what a reviewer should double-check. Edit freely.
 
 **Reviewer should double-check**
 - An `http.ErrAbortHandler` panic is re-raised by `recover` and still gets no access-log line; the server aborts that response on purpose.
+
+---
+
+## Follow-up: README "Tools and AI" (issue #22, branch `22-readme-tools-and-ai`)
+
+**Produced**
+- A README section answering the brief's "describe any tool, framework, or AI used": Claude Code on Claude Opus 5.5, Copilot PR review, the dgv-session workflow's key principles, tooling and frameworks.
+- Before this, the follow-up issues #2, #5 and #8 (grouped checklists) were split into one issue per item, #10–#21, each with context, a proposal and acceptance criteria.
+
+**Assumptions**
+- The model is the user's statement (Opus 5.5 throughout). That Copilot reviewed each PR was checked on PRs #3, #6 and #9.
