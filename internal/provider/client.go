@@ -31,24 +31,28 @@ type (
 // Client is an IdentityProvider for one vendor. It authenticates, caches the
 // token, retries and circuit-breaks; the vendor package supplies enc and dec.
 type Client struct {
-	vendor  string
-	cfg     VendorConfig
-	secrets Secrets
-	enc     Encoder
-	dec     Decoder
-	http    *http.Client
-	tokens  *TokenCache
-	breaker *Breaker
+	vendor   string
+	notFound int // the status that means "no match", or 0
+	cfg      VendorConfig
+	secrets  Secrets
+	enc      Encoder
+	dec      Decoder
+	http     *http.Client
+	tokens   *TokenCache
+	breaker  *Breaker
 }
 
-func New(vendor string, cfg VendorConfig, s Secrets, enc Encoder, dec Decoder) (*Client, error) {
+// New returns a Client for one vendor. notFound is the status the vendor
+// answers "no match" with, or 0 if it says so in a 200 body (dec handles that).
+// Any other 404 is ErrUnavailable: it means we are calling the wrong place.
+func New(vendor string, notFound int, cfg VendorConfig, s Secrets, enc Encoder, dec Decoder) (*Client, error) {
 	cfg = cfg.withDefaults(vendor)
 	if err := checkBaseURL(cfg.BaseURL); err != nil {
 		return nil, err
 	}
 	cfg.BaseURL = strings.TrimRight(cfg.BaseURL, "/")
 	c := &Client{
-		vendor: vendor, cfg: cfg, secrets: s, enc: enc, dec: dec,
+		vendor: vendor, notFound: notFound, cfg: cfg, secrets: s, enc: enc, dec: dec,
 		// No redirects: credentials and tokens go only to the configured host.
 		http: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -121,6 +125,9 @@ func (c *Client) identity(ctx context.Context, payload any, refreshed *bool) ([]
 			c.tokens.Invalidate(tok)
 			continue
 		}
+		if status == c.notFound {
+			return nil, ErrNotFound
+		}
 		return body, classify("identity", status, h)
 	}
 }
@@ -131,8 +138,6 @@ func classify(op string, status int, h http.Header) error {
 		return nil
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return fmt.Errorf("%w: %s: status %d", ErrUnauthorized, op, status)
-	case http.StatusNotFound:
-		return ErrNotFound
 	case http.StatusBadRequest, http.StatusUnprocessableEntity:
 		return fmt.Errorf("%w: %s: status %d", ErrInvalidRequest, op, status)
 	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
@@ -156,8 +161,8 @@ func (c *Client) authenticate(ctx context.Context) (Token, error) {
 		return Token{}, err
 	}
 	switch err := classify("auth", status, h); {
-	case errors.Is(err, ErrNotFound), errors.Is(err, ErrInvalidRequest):
-		// Not the lookup's fault: don't let the caller read it as "no match" or "bad input".
+	case errors.Is(err, ErrInvalidRequest):
+		// Not the lookup's fault: don't let the caller read it as "bad input".
 		return Token{}, fmt.Errorf("%w: auth: status %d", ErrUnavailable, status)
 	case err != nil:
 		return Token{}, err

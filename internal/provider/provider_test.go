@@ -36,11 +36,16 @@ type vendor struct {
 	name string
 	fake func(testing.TB, ...provider.Identity) *providertest.Fake
 	new  func(provider.VendorConfig, provider.Secrets) (*provider.Client, error)
+	// on404 is what a 404 from /identity means: "no match" only where the vendor says so with one.
+	on404 error
 }
 
 // The resilience tests run against both vendors, so each adapter's wiring
 // into the shared client is covered, not just the client.
-var vendors = []vendor{{abc.Name, abc.NewFake, abc.New}, {xyz.Name, xyz.NewFake, xyz.New}}
+var vendors = []vendor{
+	{abc.Name, abc.NewFake, abc.New, provider.ErrNotFound},
+	{xyz.Name, xyz.NewFake, xyz.New, provider.ErrUnavailable}, // XYZ says "no match" with a 200
+}
 
 type clock struct {
 	mu sync.Mutex
@@ -54,6 +59,7 @@ type env struct {
 	p     *provider.Client
 	fake  *providertest.Fake
 	clock *clock
+	v     vendor
 }
 
 // forEachVendor runs fn against each vendor's fake, with millisecond backoff
@@ -72,7 +78,7 @@ func forEachVendor(t *testing.T, cfg provider.VendorConfig, fn func(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			fn(t, env{p, f, c})
+			fn(t, env{p, f, c, v})
 		})
 	}
 }
@@ -333,7 +339,7 @@ func TestPermanentFailuresAreNotRetried(t *testing.T) {
 	forEachVendor(t, provider.VendorConfig{}, func(t *testing.T, e env) {
 		for status, want := range map[int]error{
 			400: provider.ErrInvalidRequest,
-			404: provider.ErrNotFound,
+			404: e.v.on404,
 			500: provider.ErrUnavailable,
 		} {
 			before := e.fake.IdentityCalls()
@@ -344,6 +350,25 @@ func TestPermanentFailuresAreNotRetried(t *testing.T) {
 			if n := e.fake.IdentityCalls() - before; n != 1 {
 				t.Errorf("%d: /identity called %d times, want 1", status, n)
 			}
+		}
+	})
+}
+
+// A 404 from a vendor that doesn't use it for "no match" means we are calling
+// the wrong place (a bad base path, a removed endpoint): the vendor is not
+// answering, so the breaker opens rather than reporting "no match" forever.
+func TestUnexpected404OpensBreaker(t *testing.T) {
+	cfg := provider.VendorConfig{MaxAttempts: 1, BreakerThreshold: 2, BreakerCooldown: time.Minute}
+	forEachVendor(t, cfg, func(t *testing.T, e env) {
+		if e.v.on404 == provider.ErrNotFound {
+			t.Skip("404 is this vendor's no-match answer")
+		}
+		e.fake.Fail("/identity", 2, 404, "")
+		for range 2 {
+			e.p.Lookup(context.Background(), adaLookup)
+		}
+		if _, err := e.p.Lookup(context.Background(), adaLookup); !errors.Is(err, provider.ErrCircuitOpen) {
+			t.Fatalf("got %v, want ErrCircuitOpen", err)
 		}
 	})
 }
