@@ -20,7 +20,8 @@ Toolchain: Go 1.27.1 (pinned through `go.mod`'s `go` directive and a local `mise
   `internal/api/errors.go` is the only place sentinels become HTTP statuses.
 - **Context.** Every function that does I/O takes `ctx context.Context` first.
 - **Gates per step.** `go vet ./...` and `go test -race ./...` pass before each commit.
-  One commit per step (SPEC, Q1, Q2, Q3).
+  Each step (Q1, Q2, Q3) is a GitHub issue and a PR to `main`, with commits per layer and CI
+  (`.github/workflows/ci.yml`) running the suite on all three databases.
 
 ### Layout
 
@@ -31,7 +32,7 @@ internal/profile/           Profile model, Store interface, Repository (seals/un
 internal/credential/        Credential model, Store interface, argon2id hasher
 internal/store/postgres/    pgx implementation of both stores (PostgreSQL + CockroachDB), migrations
 internal/store/sqlite/      modernc.org/sqlite implementation of both stores, migrations
-internal/store/storetest/   shared contract suites, run by every implementation
+internal/store/storetest/   the shared contract suite, run by every implementation
 internal/api/               HTTP server, middleware, handlers, error mapping, token verifier stub
 internal/provider/          IdentityProvider, Identity model, token cache, retry, breaker, secrets
 internal/provider/abc/      ABC adapter + httptest fake
@@ -45,205 +46,108 @@ importable non-`_test` package so both store packages can call it.
 
 ## 1. Q1: DAO
 
+Kept deliberately small for a 30-minute walkthrough; DESIGN.md §1 covers what a full version adds.
+
 ### 1.1 Crypto (`internal/crypto`)
 
 ```go
-// Envelope wraps per-record data encryption keys (DEKs) with a key-encryption key (KEK)
-// that never leaves the key service.
 type Envelope interface {
-    // GenerateDataKey returns a fresh 256-bit DEK and the same key wrapped by the KEK.
     GenerateDataKey(ctx context.Context) (plaintext, wrapped []byte, err error)
-    // DecryptDataKey unwraps a DEK produced by GenerateDataKey.
     DecryptDataKey(ctx context.Context, wrapped []byte) ([]byte, error)
 }
+type LocalKeyEnvelope struct{ /* KEK in memory; dev/test only */ }
+type VaultTransitEnvelope struct{ /* TODO stub */ }
 
-type LocalKeyEnvelope struct{ /* AES-256-GCM KEK held in memory; dev/test only */ }
-type VaultTransitEnvelope struct{ /* TODO stub: transit/datakey/plaintext/<key> and transit/decrypt/<key> */ }
+func Seal(key, plaintext, aad []byte) ([]byte, error) // AES-256-GCM, nonce||ciphertext
+func Open(key, sealed, aad []byte) ([]byte, error)    // any failure → ErrDecrypt
 
-// Seal and Open encrypt one field with AES-256-GCM under a DEK.
-// aad binds the ciphertext to its row and column so ciphertexts cannot be swapped between rows.
-func Seal(dek, plaintext, aad []byte) ([]byte, error)
-func Open(dek, ciphertext, aad []byte) ([]byte, error)
-
-// BlindIndex computes HMAC-SHA256 over a normalised value with a key separate from the KEK.
-type BlindIndex struct{ /* key */ }
-func (b BlindIndex) Phone(e164 string) []byte
+type BlindIndex struct{ /* HMAC-SHA256 key, separate from the KEK */ }
+func (b *BlindIndex) Sum(value string) []byte
 ```
-
-Wrapped DEKs carry a key-version prefix so the KEK can be rotated without rewriting rows at once.
-
-Sentinels: `crypto.ErrDecrypt`.
 
 ### 1.2 Profile (`internal/profile`)
 
 ```go
-type Address struct {
-    StreetAddress, Locality, Region, PostalCode, Country string
-}
-
+type Address struct{ StreetAddress, Locality, Region, PostalCode, Country string }
 type Profile struct {
-    ID        string    // UUIDv7, server-assigned
+    ID        string // UUIDv7
     Name      string
-    Phone     string    // E.164, normalised on write
+    Phone     string // E.164
     Address   Address
     CreatedAt time.Time
-    UpdatedAt time.Time
-}
-// Profile and Address implement slog.LogValuer and log as redacted.
+} // implements slog.LogValuer: logs only the ID
 
-// Sealed is what a Store persists. Stores never see plaintext PII.
-type Sealed struct {
-    ID          string
-    WrappedDEK  []byte
-    Name        []byte // ciphertext
-    Phone       []byte // ciphertext
-    Address     []byte // ciphertext of JSON-encoded Address
-    PhoneIndex  []byte // blind index
-    CreatedAt   time.Time
-    UpdatedAt   time.Time
+type Sealed struct { // what a Store persists: ciphertext only
+    ID                                   string
+    WrappedDEK, Name, Phone, Address     []byte
+    PhoneIndex                           []byte
+    CreatedAt                            time.Time
 }
 
-// Store is the ProfileStore from the brief.
-type Store interface {
-    Create(ctx context.Context, p Sealed) error
+type Store interface { // the ProfileStore
+    Create(ctx context.Context, s Sealed) error
     Get(ctx context.Context, id string) (Sealed, error)
-    Update(ctx context.Context, p Sealed) error
-    Delete(ctx context.Context, id string) error
-    // FindByPhoneIndex returns up to limit rows with id > after, ordered by id.
     FindByPhoneIndex(ctx context.Context, index []byte, after string, limit int) ([]Sealed, error)
 }
 
-// Repository is the DAO callers use: plaintext Profile in, plaintext Profile out.
-type Repository struct{ /* Store, crypto.Envelope, crypto.BlindIndex, clock, id generator */ }
+func NewRepository(s Store, env crypto.Envelope, index *crypto.BlindIndex) *Repository
 func (r *Repository) Create(ctx context.Context, p Profile) (Profile, error)
 func (r *Repository) Get(ctx context.Context, id string) (Profile, error)
-func (r *Repository) Update(ctx context.Context, p Profile) (Profile, error)
-func (r *Repository) Delete(ctx context.Context, id string) error
-func (r *Repository) Search(ctx context.Context, q Query) (Page, error)
-
-type Query struct {
-    Phone     string // required; exact match through the blind index
-    Name      string // optional; exact match after normalisation, applied post-decrypt
-    PageSize  int    // default 20, max 100
-    PageToken string // opaque, contains no PII
-}
-type Page struct {
-    Items         []Profile
-    NextPageToken string
-}
+func (r *Repository) Search(ctx context.Context, phone, after string, limit int) ([]Profile, error)
+func NormalizePhone(s string) (string, error)
 ```
 
-Sentinels: `profile.ErrNotFound`, `profile.ErrInvalid`, `profile.ErrConflict`.
+Each row gets its own DEK; each field is sealed with AAD `"<id>|<column>"`.
+Sentinels: `ErrNotFound`, `ErrInvalid`, `ErrConflict`.
 
 ### 1.3 Credential (`internal/credential`)
 
 ```go
-type Method string
-const (
-    MethodPassword Method = "password"
-    MethodPasskey  Method = "passkey"
-    MethodTOTP     Method = "totp"
-)
-
+type Method string // "password" | "passkey" | "totp"
 type Credential struct {
-    ID        string
-    UserID    string // profile ID
-    Username  string // lowercased, trimmed
-    Method    Method
-    Password  *PasswordData // set iff Method == MethodPassword
-    Passkey   *PasskeyData  // set iff Method == MethodPasskey
-    TOTP      *TOTPData     // set iff Method == MethodTOTP
-    CreatedAt time.Time
+    ID, UserID, Username string
+    Method               Method
+    PasswordHash         string // argon2id PHC string
+    PasskeyID, PasskeyPublicKey []byte
+    TOTPWrappedDEK, TOTPSecret  []byte // TOTPSecret is ciphertext
+    CreatedAt            time.Time
 }
+func (c Credential) Validate() error // exactly the payload for Method
 
-type PasswordData struct{ Hash string }            // argon2id PHC string; never the password
-type PasskeyData  struct{ CredentialID, PublicKey []byte; SignCount uint32 } // public material only
-type TOTPData     struct{ WrappedDEK, SecretCiphertext []byte } // must be recoverable to verify, so encrypted, not hashed
-
-// Store is the CredentialStore from the brief.
-type Store interface {
+type Store interface { // the CredentialStore
     Create(ctx context.Context, c Credential) error
-    Get(ctx context.Context, id string) (Credential, error)
     FindByUsername(ctx context.Context, username string, m Method) ([]Credential, error)
-    FindByPasskeyID(ctx context.Context, credentialID []byte) (Credential, error)
-    ListByUser(ctx context.Context, userID string) ([]Credential, error)
-    Delete(ctx context.Context, id string) error
 }
 
-// PasswordHasher hashes and verifies with argon2id (golang.org/x/crypto/argon2).
-type PasswordHasher interface {
-    Hash(password string) (string, error)
-    // Verify compares in constant time. needsRehash is true when the stored
-    // parameters are weaker than the current ones.
-    Verify(password, encoded string) (ok, needsRehash bool, err error)
-}
+type Argon2id struct{ Memory, Time uint32; Threads uint8 }
+var DefaultArgon2id = Argon2id{Memory: 64 * 1024, Time: 3, Threads: 4} // RFC 9106
+func (a Argon2id) Hash(password string) (string, error)
+func (Argon2id) Verify(password, encoded string) (bool, error) // constant-time compare
 ```
 
-Default argon2id parameters: m=64 MiB, t=3, p=4, 16-byte salt, 32-byte key (RFC 9106 second
-recommended option). Tests inject cheap parameters.
-
-`Credential.Validate()` enforces that exactly the payload matching `Method` is set.
-
-Sentinels: `credential.ErrNotFound`, `credential.ErrInvalid`, `credential.ErrConflict`.
+Sentinels: `ErrNotFound`, `ErrInvalid`, `ErrConflict`.
 
 ### 1.4 Data model
 
-Same logical schema in both dialects. Postgres/CockroachDB types shown; SQLite uses `TEXT`/`BLOB`/`INTEGER`
-with the same constraints.
+`internal/store/postgres/migrations/0001_init.up.sql` (PostgreSQL and CockroachDB) and
+`internal/store/sqlite/migrations/0001_init.up.sql` (same schema, SQLite types), each with a
+`down` file.
 
-```sql
-CREATE TABLE user_profiles (
-    id          UUID PRIMARY KEY,
-    wrapped_dek BYTEA NOT NULL,
-    name_ct     BYTEA NOT NULL,
-    phone_ct    BYTEA NOT NULL,
-    address_ct  BYTEA NOT NULL,
-    phone_bidx  BYTEA NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL,
-    updated_at  TIMESTAMPTZ NOT NULL
-);
-CREATE INDEX user_profiles_phone_bidx ON user_profiles (phone_bidx, id);
-
-CREATE TABLE user_credentials (
-    id                    UUID PRIMARY KEY,
-    user_id               UUID NOT NULL REFERENCES user_profiles (id) ON DELETE CASCADE,
-    username              TEXT NOT NULL,
-    method                TEXT NOT NULL CHECK (method IN ('password','passkey','totp')),
-    password_hash         TEXT,
-    passkey_credential_id BYTEA,
-    passkey_public_key    BYTEA,
-    passkey_sign_count    BIGINT,
-    totp_wrapped_dek      BYTEA,
-    totp_secret_ct        BYTEA,
-    created_at            TIMESTAMPTZ NOT NULL,
-    CHECK ( (method = 'password' AND password_hash IS NOT NULL AND passkey_credential_id IS NULL AND totp_secret_ct IS NULL)
-         OR (method = 'passkey'  AND passkey_credential_id IS NOT NULL AND passkey_public_key IS NOT NULL AND password_hash IS NULL AND totp_secret_ct IS NULL)
-         OR (method = 'totp'     AND totp_secret_ct IS NOT NULL AND totp_wrapped_dek IS NOT NULL AND password_hash IS NULL AND passkey_credential_id IS NULL) )
-);
-CREATE UNIQUE INDEX user_credentials_password_username ON user_credentials (username) WHERE method = 'password';
-CREATE UNIQUE INDEX user_credentials_passkey_id ON user_credentials (passkey_credential_id) WHERE method = 'passkey';
-CREATE INDEX user_credentials_user ON user_credentials (user_id);
-CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL);
-```
-
-Separate tables so they can sit under different grants (the API's DB role gets no access to
-`user_credentials`). Migrations are embedded `.sql` files per dialect, applied by a small runner in
-each store package. PostgreSQL and CockroachDB share one migration set because this schema is
-valid in both; the directory is still per dialect so they can diverge.
+- `user_profiles(id, wrapped_dek, name_ct, phone_ct, address_ct, phone_bidx, created_at)`,
+  index `(phone_bidx, id)` for search plus keyset paging.
+- `user_credentials(id, user_id → user_profiles ON DELETE CASCADE, username, method,
+  password_hash, passkey_credential_id, passkey_public_key, totp_wrapped_dek, totp_secret_ct, created_at)`
+  with a CHECK that only the method's columns are set, a partial unique index on `username`
+  for passwords, and a partial unique index on `passkey_credential_id` for passkeys.
 
 ### 1.5 Stores
 
-- `postgres.New(ctx, pool *pgxpool.Pool, opts...)` returns a type implementing both
-  `profile.Store` and `credential.Store`. All writes go through `runTx`, which retries the whole
-  transaction on SQLSTATE `40001` (CockroachDB restart, Postgres serialization failure) with
-  bounded exponential backoff. Unique violation `23505` maps to `ErrConflict`.
-- `sqlite.Open(ctx, dsn)` returns the same pair over `database/sql` + `modernc.org/sqlite`, with
-  `foreign_keys=ON`, WAL, `busy_timeout`.
-- `storetest.RunProfileStore(t, newStore func(t) profile.Store)` and
-  `storetest.RunCredentialStore(t, ...)` are the contract suites.
-- SQLite runs in every `go test`. Postgres and CockroachDB run when `TEST_POSTGRES_DSN` /
-  `TEST_COCKROACH_DSN` are set (a `docker-compose.yml` provides both) and skip otherwise. The
-  Docker daemon is not running on the build machine, so these will be reported as skipped.
+- Each dialect exposes `Open(ctx, dsn)` plus `NewProfileStore` and `NewCredentialStore`:
+  two types, so each can be handed a connection under a different database role.
+- `postgres.withRetry` re-runs a whole statement on SQLSTATE `40001` (up to 5 attempts, full
+  jitter). `23505` → `ErrConflict`; a malformed UUID (`22P02`) → `ErrNotFound`.
+- `storetest.Run(t, func(t) Harness)` is the one contract suite; SQLite always runs it,
+  PostgreSQL and CockroachDB run it when `TEST_POSTGRES_DSN` / `TEST_COCKROACH_DSN` are set.
 
 ---
 

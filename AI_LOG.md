@@ -33,3 +33,29 @@ and what a reviewer should double-check. Edit freely.
 - Commit granularity: one commit per step as requested. Red/Green cycles are not separate commits.
 
 
+
+---
+
+## Step Q1: DAO (issue #1, branch `1-q1-dao`)
+
+**Produced**
+- `internal/crypto`: envelope interface, local-key implementation, Vault transit stub, AES-GCM `Seal`/`Open` with AAD, HMAC blind index.
+- `internal/profile`: model, `Store`, `Repository` (per-row DEK, AAD `"<id>|<column>"`, E.164 normalisation, phone search with keyset paging), `slog.LogValuer` redaction.
+- `internal/credential`: `Method` type, `Validate`, argon2id `Hash`/`Verify`, `Store`.
+- `internal/store/storetest`: one contract suite (6 tests). `internal/store/sqlite` and `internal/store/postgres` implement it; postgres adds `withRetry` for SQLSTATE 40001.
+- Migrations (up and down) per dialect, `docker-compose.yml`, `.github/workflows/ci.yml`, README, DESIGN.md Q1, SPEC.md §1 rewritten to match what was built.
+- TDD: each package's test was written and seen failing before its code. Teeth checks: removing AAD binding broke `TestSealOpen`; removing the CHECK constraint broke the contract's mismatch test.
+
+**Assumptions**
+- Scope cut to a 30-minute walkthrough at the user's request: no profile update/delete, no name filter, no opaque page tokens, no rehash detection, no versioned migration runner. Each is listed in DESIGN.md "With more time".
+- The phone normaliser strips spaces, dashes, dots and parentheses, then requires `+` followed by 8–15 digits. It does not handle national formats (`(555) 123-4567` with no country code); a real one would use libphonenumber with a default region.
+- `BlindIndex.Sum` is generic; normalisation lives in `profile`, so the crypto package knows nothing about phones.
+- Separate store types per table (`ProfileStore`, `CredentialStore`), so each can get its own DB connection and role.
+- CI skips draft PRs and runs on `ready_for_review`, matching the dgv workflow that keeps PRs in draft during review.
+- `cockroachdb/cockroach:latest` is unpinned in both compose and CI; pin it for reproducibility.
+
+**Reviewer should double-check**
+- `withRetry` wraps single statements only. A multi-statement transaction must be retried as a whole: pass the whole `pgx.BeginFunc` as `fn`, not a piece of it.
+- `Argon2id.Verify` trusts the parameters in the stored hash. Stored hashes are ours, but an attacker who can write `password_hash` could set a huge `m` to make verification expensive.
+- `profile.open` uses a sticky-error closure to open three fields; check you find it readable.
+- The Postgres `Get` maps SQLSTATE `22P02` (bad UUID text) to `ErrNotFound`; that is intentional for Q2's uniform 404.
