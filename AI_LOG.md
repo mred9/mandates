@@ -202,4 +202,5 @@ and what a reviewer should double-check. Edit freely.
 - No `CLAUDE.md`: the Claude Code docs (memory, "AGENTS.md" section) say that since v2.1.277 it reads `AGENTS.md` when there is no `CLAUDE.md` or `CLAUDE.local.md` in the working directory or above it, and only `CLAUDE.md` when there is one.
 
 **Reviewer should double-check**
-- The commands were run as written, except the Docker Compose form, which CI runs on every ready PR with the same DSNs.
+- All commands were run as written, including the Docker Compose form from a cold start (databases ready in ~4s; Postgres and CockroachDB contract tests ran, none skipped).
+- Review fixes: wait for the databases before testing, `-count=1`, how the DB tests skip (no `SKIP` without `-v`), `CLAUDE.local.md` named too, the error-text rule narrowed to errors that reach a log or client, an empty dev server.

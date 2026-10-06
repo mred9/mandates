@@ -14,7 +14,8 @@ Read these before changing anything; this file does not repeat them:
 - **AI_LOG.md**: what each step produced, its assumptions, and what to double-check.
 - **README.md**: setup, status, layout, and the tools used.
 
-Don't add a `CLAUDE.md`: when one exists, Claude Code reads it instead of this file.
+Don't add a `CLAUDE.md` or `CLAUDE.local.md`: when either exists, Claude Code reads it instead of
+this file.
 
 ## Commands
 
@@ -25,9 +26,10 @@ go vet ./...
 go test -race ./...                 # SQLite only: the PostgreSQL and CockroachDB tests skip
 
 docker compose up -d                # PostgreSQL 17 and CockroachDB, single node
+# wait until both accept connections (a few seconds on first start), or the suite fails to open them
 TEST_POSTGRES_DSN='postgres://postgres:postgres@localhost:5432/mandates?sslmode=disable' \
 TEST_COCKROACH_DSN='postgres://root@localhost:26257/defaultdb?sslmode=disable' \
-go test -race ./...                 # the same contract suite on all three databases
+go test -race -count=1 ./...        # the same contract suite on all three databases
 
 go run ./cmd/server -dev            # prints a profiles:read bearer token to stderr
 ```
@@ -36,12 +38,12 @@ CI (`.github/workflows/ci.yml`) runs the full form on every PR that isn't a draf
 
 ## Rules the code depends on
 
-Changes must keep these true. Each one is explained in DESIGN.md.
+Changes must keep these true. DESIGN.md and SPEC.md explain each one.
 
 - **No PII or secrets in logs or errors.** Types that hold either (`Profile`, `Address`,
   `Credential`, `Identity`, `LookupRequest`, `Credentials`, `Token`) redact themselves as
-  `slog.LogValuer`s, and `api.NewLogger` redacts by key as a backstop. Error text never quotes a
-  request, a vendor's response body or a secret store's error. A new type that holds PII needs a
+  `slog.LogValuer`s, and `api.NewLogger` redacts by key as a backstop. Errors that reach a log or
+  a client never quote a request, a vendor's response body or a secret store's error. A new type that holds PII needs a
   `LogValue`.
 - **Audit before PII.** A handler records its audit event before writing personal data, and fails
   closed if the audit write fails.
@@ -87,10 +89,14 @@ On Claude Code, the `dgv-dev-workflow` plugin (the `dgv-session` skill) runs thi
 - **AI_LOG.md conflicts.** Parallel PRs all append to the end of it; rebase the later ones and keep
   every entry, in merge order.
 - **The database tests skip quietly.** Without `TEST_POSTGRES_DSN` and `TEST_COCKROACH_DSN` they
-  report `SKIP`, not failure, so a local green run has covered SQLite only.
+  pass with a plain `ok` (`-v` shows the `SKIP`), so a local green run has covered SQLite only. Use
+  `-count=1` with the DSNs, or a cached pass can stand in for a real run.
 - **CI skips draft PRs.** It runs once a PR is marked ready.
 - **`-dev` mode generates its own keys** unless `MANDATES_KEK` and `MANDATES_INDEX_KEY` are set, so
   data written in one run can't be read in the next.
+- **The dev server starts empty.** The API has no write endpoints, so reads return 404 or no
+  results until profiles are created through `profile.Repository.Create` with the same keys.
+  Without `-dev` the server refuses to start (the production token verifier is a TODO).
 
 ## Open work
 
