@@ -386,7 +386,7 @@ func TestPanicIsAccessLogged(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("got %d access-log lines, want 1:\n%s", len(lines), f.logs)
 	}
-	if l := lines[0]; l["status"] != 500.0 || l["route"] != "GET /v1/profiles/{id}" || l["request_id"] != "req-panic" {
+	if l := lines[0]; l["status"] != 500.0 || l["route"] != "GET /v1/profiles/{id}" || l["request_id"] != "req-panic" || l["client_id"] != "app" {
 		t.Errorf("access log: %v", l)
 	}
 }
