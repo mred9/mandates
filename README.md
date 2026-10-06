@@ -46,10 +46,11 @@ go test -race ./...                 # SQLite only; Postgres/CockroachDB tests sk
 docker compose up -d                # PostgreSQL 17 and CockroachDB, single node
 TEST_POSTGRES_DSN='postgres://postgres:postgres@localhost:5432/mandates?sslmode=disable' \
 TEST_COCKROACH_DSN='postgres://root@localhost:26257/defaultdb?sslmode=disable' \
-go test -race ./...                 # the same contract suite on all three databases
+go test -race -count=1 ./...        # the same contract suite on all three databases
 ```
 
-CI (`.github/workflows/ci.yml`) runs the second form on every PR.
+CI (`.github/workflows/ci.yml`) runs the second form on pushes to main and on PRs once they are
+marked ready (drafts skip it).
 
 ## Status
 

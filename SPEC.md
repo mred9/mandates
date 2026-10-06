@@ -40,7 +40,7 @@ internal/provider/abc/      ABC adapter + its fake
 internal/provider/xyz/      XYZ adapter + its fake
 ```
 
-`storetest` and `providertest` are the additions to the requested layout: shared test code has to
+`storetest` and `providertest` are the additions to the layout I first planned: shared test code has to
 live in an importable non-`_test` package so several packages can use it.
 
 ---
@@ -359,8 +359,9 @@ Sentinels: `ErrNotFound`, `ErrInvalidRequest`, `ErrUnauthorized`, `ErrUnavailabl
 
 ### 3.2 Vendor schemas
 
-The brief gives one shape for both vendors. To show the adapter boundary doing real work I
-assume ABC uses it verbatim and XYZ differs:
+The brief names the vendors "ABC, or XYC"; this repo calls the second one XYZ. The brief gives one
+shape for both vendors. To show the adapter boundary doing real work I assume ABC uses it verbatim
+and XYZ differs:
 
 | | ABC | XYZ (assumed) |
 |---|---|---|
