@@ -26,7 +26,7 @@ type Auditor interface {
 type SlogAuditor struct{ Logger *slog.Logger }
 
 func (a SlogAuditor) Record(ctx context.Context, e AuditEvent) error {
-	a.Logger.InfoContext(ctx, "audit", "time", e.Time, "request_id", e.RequestID, "client_id", e.ClientID,
+	a.Logger.InfoContext(ctx, "audit", "event_time", e.Time, "request_id", e.RequestID, "client_id", e.ClientID,
 		"action", e.Action, "subject_ids", e.SubjectIDs, "outcome", e.Outcome)
 	return nil
 }
