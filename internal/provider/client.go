@@ -85,8 +85,9 @@ func (c *Client) Lookup(ctx context.Context, req LookupRequest) (Identity, error
 	req.Phone = phone
 
 	var id Identity
+	refreshed := false // one re-auth per lookup, across retry attempts
 	err = Do(ctx, c.cfg, c.breaker, func(ctx context.Context) error {
-		body, err := c.identity(ctx, c.enc(req))
+		body, err := c.identity(ctx, c.enc(req), &refreshed)
 		if err != nil {
 			return err
 		}
@@ -105,8 +106,8 @@ func (c *Client) Lookup(ctx context.Context, req LookupRequest) (Identity, error
 
 // identity posts to /identity. A 401 means the cached token went stale: drop
 // it and try once more with a fresh one.
-func (c *Client) identity(ctx context.Context, payload any) ([]byte, error) {
-	for refreshed := false; ; refreshed = true {
+func (c *Client) identity(ctx context.Context, payload any, refreshed *bool) ([]byte, error) {
+	for {
 		tok, err := c.tokens.Token(ctx)
 		if err != nil {
 			return nil, err
@@ -115,7 +116,8 @@ func (c *Client) identity(ctx context.Context, payload any) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if status == http.StatusUnauthorized && !refreshed {
+		if status == http.StatusUnauthorized && !*refreshed {
+			*refreshed = true
 			c.tokens.Invalidate(tok)
 			continue
 		}
@@ -188,10 +190,12 @@ func (c *Client) post(ctx context.Context, path, bearer string, payload any) (in
 		return 0, nil, nil, &retryable{err: err} // network error or this attempt's timeout
 	}
 	defer resp.Body.Close()
-	// A longer answer is cut off, fails to decode and counts as malformed.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
 		return 0, nil, nil, &retryable{err: err}
+	}
+	if len(body) > maxBody { // checked, not just cut: a cut answer can still decode
+		return 0, nil, nil, fmt.Errorf("%w: %s: response over %d bytes", ErrUnavailable, path, maxBody)
 	}
 	return resp.StatusCode, resp.Header, body, nil
 }

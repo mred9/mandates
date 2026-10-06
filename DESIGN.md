@@ -256,7 +256,8 @@ don't retry together. A `Retry-After` from the vendor wins, but is capped at `Ba
 vendor saying "come back in an hour" shouldn't hold a caller's request for an hour.
 
 **Two deadlines.** Each attempt has its own `Timeout`, so one hung connection costs one attempt,
-not the whole lookup. The caller's context bounds everything: once it is done the client stops,
+not the whole lookup. The timeout covers everything in the attempt (a token fetch, `/identity`,
+a re-auth), which bounds an attempt's total time rather than each request's. The caller's context bounds everything: once it is done the client stops,
 returns the caller's error rather than `ErrUnavailable`, and doesn't count it against the vendor.
 
 **A circuit breaker per vendor.** After `BreakerThreshold` consecutive failed lookups the breaker

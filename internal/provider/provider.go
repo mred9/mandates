@@ -76,7 +76,7 @@ func (VaultSecrets) VendorCredentials(context.Context, string) (Credentials, err
 // VendorConfig tunes one vendor's client. Zero fields take the defaults below.
 type VendorConfig struct {
 	BaseURL          string        // https, or http on a loopback host (tests)
-	Timeout          time.Duration // per HTTP attempt; default 5s
+	Timeout          time.Duration // per attempt (its /auth, /identity and any re-auth); default 5s
 	MaxAttempts      int           // default 3
 	BackoffBase      time.Duration // default 100ms
 	BackoffMax       time.Duration // also caps Retry-After; default 2s

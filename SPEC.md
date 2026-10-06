@@ -308,7 +308,7 @@ func (b *Breaker) Record(err error) // ErrUnavailable is a failure; the caller's
 
 type VendorConfig struct {
     BaseURL          string        // https, or http to a loopback host (tests)
-    Timeout          time.Duration // per HTTP attempt; 5s
+    Timeout          time.Duration // per attempt, covering its /auth, /identity and any re-auth; 5s
     MaxAttempts      int           // 3
     BackoffBase      time.Duration // 100ms, full jitter
     BackoffMax       time.Duration // 2s; also caps Retry-After
@@ -334,7 +334,7 @@ func New(vendor string, cfg VendorConfig, s Secrets, enc Encoder, dec Decoder) (
 **Lookup.**
 1. Validate the request: phone must normalise to E.164 (`profile.NormalizePhone`) and the name must be non-empty. Otherwise return `ErrInvalidRequest` without a vendor call.
 2. Get a token: cached, or fetched from `POST /auth` with credentials from `Secrets`.
-3. Call `POST /identity`. A 401 invalidates the token and retries once with a fresh one.
+3. Call `POST /identity`. A 401 invalidates the token and retries with a fresh one, once per lookup (across retry attempts).
 4. Decode the response, normalise the phone to E.164 and the country to upper-case ISO 3166-1 alpha-2, and set `Provider`.
 
 | Vendor status | Result | Retried |

@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -219,6 +222,17 @@ func TestStaleTokenIsRefreshedOnce(t *testing.T) {
 		}
 		if n := e.fake.AuthCalls(); n != 3 {
 			t.Fatalf("/auth called %d times, want 3 (one refresh per lookup)", n)
+		}
+
+		// The one refresh is per lookup, not per retry attempt.
+		e.fake.Fail("/identity", 1, 401, "")
+		e.fake.Fail("/identity", 1, 503, "")
+		e.fake.Fail("/identity", 1, 401, "")
+		if _, err := e.p.Lookup(context.Background(), adaLookup); !errors.Is(err, provider.ErrUnauthorized) {
+			t.Fatalf("401, 503, 401: got %v, want ErrUnauthorized", err)
+		}
+		if n := e.fake.AuthCalls(); n != 4 {
+			t.Fatalf("/auth called %d times, want 4", n)
 		}
 	})
 }
@@ -463,6 +477,27 @@ func TestNoSecretsOrPIIInErrorsOrLogs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestOversizedAnswerIsRejectedEvenIfItDecodes(t *testing.T) {
+	// A valid ABC answer followed by 2 MiB of whitespace: cut at 1 MiB it would still decode.
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /auth", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"access_token":"t","expires_in":3600}`)
+	})
+	mux.HandleFunc("POST /identity", func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"name":"Ada Lovelace","phone":"+442079460958","address":{"country":"GB"}}`)
+		io.WriteString(w, strings.Repeat(" ", 2<<20))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	p, err := abc.New(provider.VendorConfig{BaseURL: srv.URL}, provider.StaticSecrets{abc.Name: providertest.Creds})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Lookup(context.Background(), adaLookup); !errors.Is(err, provider.ErrUnavailable) {
+		t.Fatalf("got %v, want ErrUnavailable", err)
 	}
 }
 
