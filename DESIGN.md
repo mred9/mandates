@@ -129,7 +129,7 @@ Q2 relies on this to return one uniform 404 regardless of why the profile wasn't
 ### Shape
 
 ```
-request ─▶ request ID ─▶ recover ─▶ access log ─▶ ServeMux ─▶ auth + scope ─▶ rate limit ─▶ handler ─▶ audit ─▶ response
+request ─▶ request ID ─▶ access log ─▶ recover ─▶ ServeMux ─▶ auth + scope ─▶ rate limit ─▶ handler ─▶ audit ─▶ response
            (+16 KiB cap)                                       (per route)                    │
                                                                                 profile.Repository (Q1)
 ```

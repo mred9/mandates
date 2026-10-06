@@ -44,8 +44,9 @@ type api struct {
 	limiter *limiter
 }
 
-// New returns the handler. Middleware, outer to inner: request ID, recover,
-// access log, then per route: auth and scope, rate limit, handler.
+// New returns the handler. Middleware, outer to inner: request ID, access log,
+// recover (inside the log, so a panic's 500 is logged), then per route: auth
+// and scope, rate limit, handler.
 func New(cfg Config) http.Handler {
 	a := &api{cfg: cfg, limiter: &limiter{r: cfg.Rate, b: cfg.Burst, m: map[string]*rate.Limiter{}}}
 	mux := http.NewServeMux()
@@ -53,7 +54,7 @@ func New(cfg Config) http.Handler {
 	mux.Handle("POST /v1/profiles/search", a.protect(ScopeProfilesRead, a.searchProfiles))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { a.fail(w, r, errNoRoute) })
-	return a.withRequestID(a.recover(a.accessLog(mux)))
+	return a.withRequestID(a.accessLog(a.recover(mux)))
 }
 
 func (a *api) fail(w http.ResponseWriter, r *http.Request, err error) {

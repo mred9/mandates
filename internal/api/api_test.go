@@ -372,6 +372,25 @@ func TestInternalErrors(t *testing.T) { // AC8
 	}
 }
 
+// A panicking request still gets its access-log line, with the 500 it was answered with.
+func TestPanicIsAccessLogged(t *testing.T) {
+	f := newFixture(t, func(c *Config) { c.Profiles = panicky{} })
+	f.do("GET", "/v1/profiles/x", "", "X-Request-ID", "req-panic")
+	var lines []map[string]any
+	for _, l := range strings.Split(strings.TrimSpace(f.logs.String()), "\n") {
+		var m map[string]any
+		if json.Unmarshal([]byte(l), &m) == nil && m["msg"] == "request" {
+			lines = append(lines, m)
+		}
+	}
+	if len(lines) != 1 {
+		t.Fatalf("got %d access-log lines, want 1:\n%s", len(lines), f.logs)
+	}
+	if l := lines[0]; l["status"] != 500.0 || l["route"] != "GET /v1/profiles/{id}" || l["request_id"] != "req-panic" || l["client_id"] != "app" {
+		t.Errorf("access log: %v", l)
+	}
+}
+
 func TestUnknownRouteUsesEnvelope(t *testing.T) {
 	f := newFixture(t, nil)
 	w := f.do("GET", "/nope", "")

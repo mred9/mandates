@@ -227,8 +227,8 @@ server (JWKS, `iss`, `aud`, `exp`, `scope`) or uses RFC 7662 introspection.
 ### 2.3 Middleware chain (outer → inner)
 
 1. **Request ID**: accept `X-Request-ID` if it matches `[A-Za-z0-9_-]{1,64}`, else generate; echo it; put it in context. Also caps the body at 16 KiB (`http.MaxBytesReader`).
-2. **Recover**: panic → 500 with the error envelope.
-3. **Access log**: method, route pattern (not raw path), status, duration, request ID, client ID. No bodies, no query strings.
+2. **Access log**: method, route pattern (not raw path), status, duration, request ID, client ID. No bodies, no query strings.
+3. **Recover**: panic → 500 with the error envelope. Inside the access log, so a panicked request is logged with its 500.
 4. **Auth** (per route): bearer → `Principal`; scope check.
 5. **Rate limit** (per route): token bucket per `ClientID` (`golang.org/x/time/rate`). Keys are authenticated client IDs, so buckets are not evicted.
 6. **Handler.** Records an audit event for every PII read before writing the response.
