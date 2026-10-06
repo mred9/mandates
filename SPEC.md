@@ -4,8 +4,8 @@ This spec covers the interfaces, data model and endpoints for the three parts of
 It is the contract I build against. DESIGN.md (written alongside the code) explains *why*;
 this file says *what*.
 
-Module path: `github.com/edegroot/mandates` (placeholder, see AI_LOG.md).
-Toolchain: Go 1.27 (pinned through `go.mod`'s `go` directive and a local `mise.toml`).
+Module path: `github.com/mred9/mandates`.
+Toolchain: Go 1.27.1 (pinned through `go.mod`'s `go` directive and a local `mise.toml`).
 
 ---
 

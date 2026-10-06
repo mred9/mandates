@@ -12,8 +12,8 @@ and what a reviewer should double-check. Edit freely.
 - `AI_LOG.md` (this file), `.gitignore`.
 
 **Assumptions**
-- Module path `github.com/edegroot/mandates` is a placeholder; change it before publishing.
-- Go 1.27.1 via mise (installed on the machine but no version was set for the shim).
+- Module path `github.com/mred9/mandates`, matching the GitHub remote.
+- Go 1.27.1, pinned in `mise.toml`.
 - Added `internal/store/storetest` to the requested layout: the shared contract suite has to be an importable package so both store packages can run it.
 - Idiomatic names: the brief's `ProfileStore`/`CredentialStore` are `profile.Store` and `credential.Store`.
 - Stores persist only sealed (encrypted) profile records; encryption lives in `profile.Repository`, so the dialect code never handles plaintext PII and the crypto is written once.
@@ -31,3 +31,5 @@ and what a reviewer should double-check. Edit freely.
 - Whether the API returning 404 for malformed IDs (instead of 400) is the trade-off you want.
 - Default argon2id parameters (64 MiB / t=3 / p=4) against your target hardware.
 - Commit granularity: one commit per step as requested. Red/Green cycles are not separate commits.
+
+
