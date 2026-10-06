@@ -29,17 +29,31 @@ const (
 var b64 = base64.RawStdEncoding
 
 func (a Argon2id) Hash(password string) (string, error) {
+	if !a.valid() {
+		return "", fmt.Errorf("%w: argon2id parameters out of range", ErrInvalid)
+	}
 	salt := make([]byte, saltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("credential: salt: %w", err)
 	}
 	key := argon2.IDKey([]byte(password), salt, a.Time, a.Memory, a.Threads, keyLen)
-	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
-		argon2.Version, a.Memory, a.Time, a.Threads, b64.EncodeToString(salt), b64.EncodeToString(key)), nil
+	return fmt.Sprintf("$argon2id$v=%d$%s$%s$%s",
+		argon2.Version, a.params(), b64.EncodeToString(salt), b64.EncodeToString(key)), nil
 }
 
 // Verify recomputes the hash with the parameters stored in encoded and
 // compares in constant time.
+func (a Argon2id) params() string {
+	return fmt.Sprintf("m=%d,t=%d,p=%d", a.Memory, a.Time, a.Threads)
+}
+
+// valid bounds the parameters: argon2.IDKey panics on t=0 or p=0, and m is an
+// allocation size, so values read from storage are checked before use.
+func (a Argon2id) valid() bool {
+	return a.Time >= 1 && a.Time <= 10 && a.Threads >= 1 &&
+		a.Memory >= 8*uint32(a.Threads) && a.Memory <= maxMemory
+}
+
 func (Argon2id) Verify(password, encoded string) (bool, error) {
 	malformed := fmt.Errorf("%w: malformed argon2id hash", ErrInvalid)
 	parts := strings.Split(encoded, "$") // "", "argon2id", "v=19", "m=..,t=..,p=..", salt, hash
@@ -47,12 +61,8 @@ func (Argon2id) Verify(password, encoded string) (bool, error) {
 		return false, malformed
 	}
 	var p Argon2id
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &p.Memory, &p.Time, &p.Threads); err != nil {
-		return false, malformed
-	}
-	// argon2.IDKey panics on t=0 or p=0, and m is an allocation size: bound
-	// everything read from storage before using it.
-	if p.Time < 1 || p.Time > 10 || p.Threads < 1 || p.Memory < 8*uint32(p.Threads) || p.Memory > maxMemory {
+	_, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &p.Memory, &p.Time, &p.Threads)
+	if err != nil || parts[3] != p.params() || !p.valid() { // Sscanf ignores trailing text
 		return false, malformed
 	}
 	salt, err1 := b64.DecodeString(parts[4])

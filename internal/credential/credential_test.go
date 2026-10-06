@@ -43,9 +43,18 @@ func TestArgon2id(t *testing.T) {
 		"$argon2id$v=19$m=1024,t=1,p=0$c2FsdHNhbHRzYWx0$aGFzaGhhc2hoYXNoaGFzaA", // p=0 panics inside argon2
 		"$argon2id$v=19$m=4294967295,t=1,p=1$c2FsdHNhbHRzYWx0$aGFzaGhhc2hoYXNoaGFzaA",
 		"$argon2id$v=19$m=1024,t=1,p=1$$aGFzaGhhc2hoYXNoaGFzaA", // empty salt
+		"$argon2id$v=19$m=1024,t=1,p=1junk$c2FsdHNhbHRzYWx0$aGFzaGhhc2hoYXNoaGFzaA",
 	} {
 		if _, err := testHasher.Verify("x", bad); !errors.Is(err, ErrInvalid) {
 			t.Errorf("Verify(%q): got %v, want ErrInvalid", bad, err)
+		}
+	}
+}
+
+func TestHashRejectsBadParameters(t *testing.T) {
+	for _, a := range []Argon2id{{}, {Memory: 1024, Time: 0, Threads: 1}, {Memory: 1024, Time: 1, Threads: 0}} {
+		if _, err := a.Hash("x"); !errors.Is(err, ErrInvalid) {
+			t.Errorf("Hash with %+v: got %v, want ErrInvalid", a, err)
 		}
 	}
 }

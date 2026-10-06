@@ -43,6 +43,10 @@ func TestSealOpen(t *testing.T) {
 		t.Fatalf("round trip: got %q, %v", pt, err)
 	}
 
+	if _, err := Seal(key(2)[:16], []byte("x"), nil); err == nil {
+		t.Fatal("Seal must refuse a key that would select AES-128")
+	}
+
 	tampered := bytes.Clone(ct)
 	tampered[len(tampered)-1] ^= 0xff
 

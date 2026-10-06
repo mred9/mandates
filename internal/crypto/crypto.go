@@ -98,6 +98,9 @@ func Open(key, sealed, aad []byte) ([]byte, error) {
 }
 
 func newGCM(key []byte) (cipher.AEAD, error) {
+	if len(key) != 32 { // aes.NewCipher would silently pick AES-128/192 for shorter keys
+		return nil, errors.New("crypto: key must be 32 bytes")
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf("crypto: cipher: %w", err)

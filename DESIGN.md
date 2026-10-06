@@ -25,7 +25,8 @@ each dialect gives them separate types over separate connections. Profiles are r
 customer-facing API; credentials are read only by the login path. Keeping them apart lets
 each sit under its own database role: the API's role never gets `SELECT` on `user_credentials`,
 so a bug in the API, or a compromise of it, can't reach password hashes. One interface with
-both would make that separation a convention instead of a grant.
+both would make that separation a convention instead of a grant. SQLite has no roles and no
+cross-file foreign keys, so there both tables share one file; SQLite is for dev and tests.
 
 **Encryption belongs in the repository, not the stores.** `profile.Repository` seals and opens.
 Stores receive `profile.Sealed`, which is ciphertext and a blind index, and never see plaintext.

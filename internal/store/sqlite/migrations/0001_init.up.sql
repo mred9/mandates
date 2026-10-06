@@ -1,5 +1,6 @@
--- Profiles and credentials live in separate tables so they can be governed
--- separately (in SQLite, by separate database files if needed).
+-- Profiles and credentials live in separate tables. SQLite has no roles and
+-- no cross-file foreign keys, so here both share one file: SQLite is for dev
+-- and tests; the access-control split is enforced in PostgreSQL/CockroachDB.
 -- PII columns hold AES-GCM ciphertext; phone_bidx is an HMAC blind index.
 CREATE TABLE IF NOT EXISTS user_profiles (
     id          TEXT PRIMARY KEY,
