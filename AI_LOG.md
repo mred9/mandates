@@ -14,20 +14,20 @@ and what a reviewer should double-check. Edit freely.
 **Assumptions**
 - Module path `github.com/mred9/mandates`, matching the GitHub remote.
 - Go 1.27.1, pinned in `mise.toml`.
-- Added `internal/store/storetest` to the requested layout: the shared contract suite has to be an importable package so both store packages can run it.
-- Idiomatic names: the brief's `ProfileStore`/`CredentialStore` are `profile.Store` and `credential.Store`.
+- Added `internal/store/storetest` to the layout in my planning prompt: the shared contract suite has to be an importable package so both store packages can run it.
+- Idiomatic names: my planning prompt's `ProfileStore`/`CredentialStore` are `profile.Store` and `credential.Store`.
 - Stores persist only sealed (encrypted) profile records; encryption lives in `profile.Repository`, so the dialect code never handles plaintext PII and the crypto is written once.
-- Search requires `phone` (blind-indexed); `name` is an optional exact-match filter applied after decryption. Only phone gets a blind index, per the brief.
+- Search requires `phone` (blind-indexed); `name` is an optional exact-match filter applied after decryption. Only phone gets a blind index, per my planning prompt. (Superseded in Q1: the name filter was cut; search is by phone only.)
 - TOTP secrets are envelope-encrypted, not hashed, because the verifier needs the raw secret.
 - Username uniqueness is enforced only for password credentials (partial unique index); passkeys are unique by credential ID. A user can hold several credentials.
 - PostgreSQL and CockroachDB share one migration set, since the schema is valid in both.
 - The XYZ vendor schema is invented so the adapter layer does real mapping work. If both vendors really use the brief's schema verbatim, the two adapters collapse into one configurable client.
-- The `/oauth2/token` endpoint exists only behind `-dev`, so the README's curl examples work without a separate authorization server.
+- The `/oauth2/token` endpoint exists only behind `-dev`, so the README's curl examples work without a separate authorization server. (Superseded in Q2: no token endpoint; `-dev` prints a token at startup.)
 - The connector (Q3) is a library and is not exposed through the API.
-- The Docker daemon isn't running here, so Postgres/CockroachDB contract tests will be reported as skipped unless DSNs are supplied.
+- The Docker daemon isn't running here, so Postgres/CockroachDB contract tests will be reported as skipped unless DSNs are supplied. (Superseded: CI runs them on every ready PR, and they were run locally with Docker Compose for #26.)
 
 **Reviewer should double-check**
-- Whether the name-matching rule (exact, post-decrypt) is acceptable or whether a name blind index is wanted.
+- Whether the name-matching rule (exact, post-decrypt) is acceptable or whether a name blind index is wanted. (Settled: the name filter was cut in Q1; DESIGN Q1 says why there is no name index.)
 - Whether the API returning 404 for malformed IDs (instead of 400) is the trade-off you want.
 - Default argon2id parameters (64 MiB / t=3 / p=4) against your target hardware.
 - Commit granularity: one commit per step as requested. Red/Green cycles are not separate commits.
@@ -204,3 +204,17 @@ and what a reviewer should double-check. Edit freely.
 **Reviewer should double-check**
 - All commands were run as written, including the Docker Compose form from a cold start (databases ready in ~4s; Postgres and CockroachDB contract tests ran, none skipped).
 - Review fixes: wait for the databases before testing, `-count=1`, how the DB tests skip (no `SKIP` without `-v`), `CLAUDE.local.md` named too, the error-text rule narrowed to errors that reach a log or client, an empty dev server.
+
+---
+
+## Final review (issue #28, branch `final-review-docs`)
+
+**Produced**
+- A fresh-context review of `main` against the exercise brief: objectives met, no code defects. The fixes it found are all in the docs:
+  - DESIGN Q1 claimed crypto-shredding reached backups and that a memory dump was useless without Vault. Neither held: the wrapped DEK is stored in the same row, and the blind-index key is in memory. Both are corrected, and production HMAC in Vault is named.
+  - DESIGN now answers four likely questions: TLS terminates at the gateway, rate limits are per replica, there's no name index, and the address is one sealed field.
+  - SPEC §3.2 notes the brief's "XYC". Step 0 here no longer calls my planning prompt "the brief", and statements later reversed are marked superseded.
+  - `Argon2id.Verify` got back its doc comment. README's CI line and `-count=1` now match AGENTS.md.
+
+**Reviewer should double-check**
+- The suggested demo for the walkthrough is `go test -v -run 'TestGetProfile|TestSearch' ./internal/api/`: there is no seed, and the API has no write endpoints.

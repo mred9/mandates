@@ -41,8 +41,6 @@ func (a Argon2id) Hash(password string) (string, error) {
 		argon2.Version, a.params(), b64.EncodeToString(salt), b64.EncodeToString(key)), nil
 }
 
-// Verify recomputes the hash with the parameters stored in encoded and
-// compares in constant time.
 func (a Argon2id) params() string {
 	return fmt.Sprintf("m=%d,t=%d,p=%d", a.Memory, a.Time, a.Threads)
 }
@@ -54,6 +52,8 @@ func (a Argon2id) valid() bool {
 		a.Memory >= 8*uint32(a.Threads) && a.Memory <= maxMemory
 }
 
+// Verify recomputes the hash with the parameters stored in encoded and
+// compares in constant time.
 func (Argon2id) Verify(password, encoded string) (bool, error) {
 	malformed := fmt.Errorf("%w: malformed argon2id hash", ErrInvalid)
 	parts := strings.Split(encoded, "$") // "", "argon2id", "v=19", "m=..,t=..,p=..", salt, hash

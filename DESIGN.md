@@ -36,13 +36,20 @@ a test can check what reaches the store (`TestCreateGetRoundTripsWithoutPlaintex
 **Envelope encryption, one data key per row.** Each profile gets a fresh 256-bit DEK, wrapped by a
 KEK that lives in the key service. Only the wrapped DEK is stored. Consequences:
 - Rotating the KEK means re-wrapping 32-byte DEKs, not re-encrypting every field.
-- Crypto-shredding: deleting a row's wrapped DEK makes its PII unrecoverable, including in
-  backups. This is useful for erasure requests.
-- With Vault transit, the KEK never leaves Vault, so the database and the app's memory dump are
-  both useless without Vault access, which is separately audited.
+- With Vault transit, the KEK never leaves Vault, so a copy of the database (or a backup) can't
+  be decrypted without Vault access, which is separately audited. A memory dump of the app is a
+  different matter: its Vault credential still allows unwrap calls (audited, and revocable), and
+  today it also holds the blind-index key (see below for moving that into Vault).
+- Not crypto-shredding: the wrapped DEK sits in the same row as the ciphertext, so deleting it
+  erases no more than deleting the row, and backups keep both. Erasure that reaches backups needs
+  the destroyed key held outside the database, e.g. a per-subject key in Vault, and takes effect
+  once Vault's own backups holding that key have aged out.
 
 `LocalKeyEnvelope` (KEK in process memory) exists for dev and tests. `VaultTransitEnvelope` is a
 stub showing where the real one plugs in.
+
+**The address is one sealed field, not five columns.** Encrypted columns can't be queried anyway,
+so splitting them would only add ciphertexts and AAD labels; the address is sealed as one JSON value.
 
 **AAD binds each ciphertext to its row and column.** Fields are sealed with AES-256-GCM and
 additional data `"<id>|<column>"`. Someone with write access to the database can't copy Alice's
@@ -62,6 +69,12 @@ equal indexes, so search is an indexed equality lookup.
   service like the KEK.
 - The index column isn't authenticated, so `Search` checks each decrypted phone against the query.
   Pointing a row's index at someone else's number returns an error, not their PII.
+- No index on name. Names don't normalise reliably (case, accents, order, nicknames), so an exact
+  name index would miss real matches. It would also leak more: common names stand out by how often
+  they repeat, while phone numbers are mostly unique.
+- In production the HMAC would be computed by Vault (transit `hmac`), so the index key never sits
+  in the app's memory. That key must not be rotated without reindexing every row, since a new key
+  version changes every index value.
 
 **Credentials: the method is a type, and the schema enforces it.** `Method` is `password`,
 `passkey` or `totp`. Each method stores only what it needs:
@@ -93,7 +106,7 @@ where it can. Wrapping reads too is a one-line change per query if contention sh
 trivial, and it runs under `-race`. Foreign keys are on, WAL is on, and `busy_timeout` is set.
 
 **One contract suite.** `storetest.Run` is the specification of a store. SQLite, PostgreSQL and
-CockroachDB all run the same six tests, and CI runs all three on every PR. A new dialect is
+CockroachDB all run the same six tests, and CI runs all three on every PR that isn't a draft. A new dialect is
 done when it passes the suite.
 
 **Malformed ID means not found.** `Get("not-a-uuid")` returns `ErrNotFound`, not a database error.
@@ -115,7 +128,8 @@ Q2 relies on this to return one uniform 404 regardless of why the profile wasn't
 
 - Vault transit for real, plus KEK rotation: prefix each wrapped DEK with its KEK version and
   re-wrap old ones in the background.
-- Profile update and delete, with delete crypto-shredding the DEK.
+- Profile update and delete, with erasure that reaches backups: a per-subject key held outside the
+  database (in Vault), destroyed on delete.
 - A rehash-on-login path: have `Verify` report when stored parameters are weaker than current ones.
 - A versioned migration runner (goose or atlas), and separate DB roles in the migration with
   `GRANT`s.
@@ -165,7 +179,8 @@ the organisation's authorization server or use introspection; the server refuses
 means one noisy client can't starve the others, and the bucket map is bounded by the number of
 registered clients, so there's nothing to evict. The gap: unauthenticated requests aren't limited.
 Token checks are cheap, but in production an edge limiter (per IP, at the load balancer or gateway)
-covers that layer.
+covers that layer. The buckets are in memory, so N replicas allow N times the rate; a shared limit
+needs the gateway or a shared store (e.g. Redis).
 
 **Audit every PII read, fail closed.** Each get and search records who (client, request ID), what
 (action, profile IDs returned) and the outcome, never the PII itself. If the audit write fails the
@@ -192,7 +207,8 @@ input or internals. 500s are logged in full with the request ID, so support can 
 are short and `[A-Za-z0-9_-]`, so they can't inject into logs.
 
 **Server hygiene.** Header, read, write and idle timeouts (slowloris), graceful shutdown on
-SIGTERM so in-flight reads finish during a deploy.
+SIGTERM so in-flight reads finish during a deploy. The server speaks plain HTTP: TLS terminates at
+the gateway in front of it, and service-to-service mTLS is under "With more time".
 
 ### Trade-offs I accepted
 
