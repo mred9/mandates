@@ -12,8 +12,8 @@ is a deliberately small proof of concept.
 
 **AI.** I built this with [Claude Code](https://claude.com/claude-code) running Claude Opus 5.5,
 which wrote the plans, code, tests and docs under my direction and review. GitHub Copilot reviewed
-each pull request. [AI_LOG.md](AI_LOG.md) records what the AI produced at each step, the assumptions it made and
-what to double-check.
+each pull request. [AI_LOG.md](AI_LOG.md) records what the AI produced at each step, the
+assumptions it made and what to double-check.
 
 **Workflow.** The work ran through my own agentic development workflow (dgv-session), a Claude
 Code plugin. Its key principles:
@@ -31,8 +31,9 @@ and CockroachDB; GitHub Actions CI running `go vet` and race tests on all three 
 code scanning (GitHub default setup).
 
 **Frameworks.** None beyond the standard library (`net/http`, `log/slog`, `database/sql`,
-`testing`). Six modules cover the database drivers, argon2id, rate limiting, singleflight and
-UUIDs; SPEC.md §5 lists them with the reason for each.
+`testing`), plus six modules (SPEC.md §5 gives the reason for each): `github.com/jackc/pgx/v5` and
+`modernc.org/sqlite` (database drivers), `golang.org/x/crypto` (argon2id), `golang.org/x/time`
+(rate limiting), `golang.org/x/sync` (singleflight) and `github.com/google/uuid` (UUIDv7 IDs).
 
 ## Run the tests
 
