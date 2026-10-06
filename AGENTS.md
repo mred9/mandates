@@ -92,11 +92,12 @@ On Claude Code, the `dgv-dev-workflow` plugin (the `dgv-session` skill) runs thi
   pass with a plain `ok` (`-v` shows the `SKIP`), so a local green run has covered SQLite only. Use
   `-count=1` with the DSNs, or a cached pass can stand in for a real run.
 - **CI skips draft PRs.** It runs once a PR is marked ready.
-- **`-dev` mode generates its own keys** unless `MANDATES_KEK` and `MANDATES_INDEX_KEY` are set, so
-  data written in one run can't be read in the next.
-- **The dev server starts empty.** The API has no write endpoints, so reads return 404 or no
-  results until profiles are created through `profile.Repository.Create` with the same keys.
-  Without `-dev` the server refuses to start (the production token verifier is a TODO).
+- **`-dev` keeps data but not keys.** The default `-dsn` is `./mandates.db`, reused across runs,
+  but keys are generated per run unless `MANDATES_KEK` and `MANDATES_INDEX_KEY` are set. Rows from
+  an earlier run then can't be decrypted: a GET of one fails instead of returning 404.
+- **The API has no write endpoints.** A fresh database returns 404 or no results until profiles are
+  created through `profile.Repository.Create` with the server's keys. Without `-dev` the server
+  refuses to start (the production token verifier is a TODO).
 
 ## Open work
 
