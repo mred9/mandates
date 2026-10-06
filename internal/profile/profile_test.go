@@ -198,7 +198,7 @@ func TestProfileLogsWithoutPII(t *testing.T) {
 	var buf bytes.Buffer
 	p := ada
 	p.ID = "0192-test"
-	slog.New(slog.NewJSONHandler(&buf, nil)).Info("loaded", "profile", p)
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("loaded", "profile", p, "address", p.Address)
 	out := buf.String()
 	if !strings.Contains(out, "0192-test") {
 		t.Fatalf("ID should be logged: %s", out)

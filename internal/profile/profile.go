@@ -31,6 +31,9 @@ type Address struct {
 	Country       string `json:"country"`
 }
 
+// LogValue redacts an Address logged on its own.
+func (Address) LogValue() slog.Value { return slog.StringValue("[REDACTED]") }
+
 type Profile struct {
 	ID        string
 	Name      string
