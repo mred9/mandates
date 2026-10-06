@@ -107,10 +107,10 @@ Q2 relies on this to return one uniform 404 regardless of why the profile wasn't
 
 ### With more time
 
-- Vault transit for real, plus KEK rotation, which re-wraps DEKs in the background using the key
-  version prefix.
+- Vault transit for real, plus KEK rotation: prefix each wrapped DEK with its KEK version and
+  re-wrap old ones in the background.
 - Profile update and delete, with delete crypto-shredding the DEK.
-- A rehash-on-login path: `Verify` reports when stored parameters are weaker than current ones.
+- A rehash-on-login path: have `Verify` report when stored parameters are weaker than current ones.
 - A versioned migration runner (goose or atlas), and separate DB roles in the migration with
   `GRANT`s.
 - Credential lookups by passkey ID and by user, and WebAuthn sign-count tracking.
