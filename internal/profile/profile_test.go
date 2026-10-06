@@ -45,8 +45,12 @@ func newRepo(t *testing.T) (*Repository, *memStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	index, err := crypto.NewBlindIndex(bytes.Repeat([]byte{2}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
 	store := &memStore{}
-	return NewRepository(store, env, crypto.NewBlindIndex(bytes.Repeat([]byte{2}, 32))), store
+	return NewRepository(store, env, index), store
 }
 
 var ada = Profile{
@@ -84,19 +88,25 @@ func TestCreateGetRoundTripsWithoutPlaintextInStore(t *testing.T) {
 	}
 }
 
-func TestCiphertextIsBoundToItsRow(t *testing.T) {
+func TestCiphertextIsBoundToItsRowAndColumn(t *testing.T) {
 	ctx := context.Background()
 	repo, store := newRepo(t)
 	a, _ := repo.Create(ctx, ada)
 	b, _ := repo.Create(ctx, ada)
 
-	// Copy a's name ciphertext and key into b's row: decryption must fail.
-	store.rows[1].Name, store.rows[1].WrappedDEK = store.rows[0].Name, store.rows[0].WrappedDEK
+	// Move all of a's sealed data, key included, under b's ID.
+	moved := store.rows[0]
+	moved.ID = b.ID
+	store.rows[1] = moved
 	if _, err := repo.Get(ctx, b.ID); !errors.Is(err, crypto.ErrDecrypt) {
-		t.Fatalf("swapped ciphertext: got %v, want ErrDecrypt", err)
+		t.Fatalf("row copied under another ID: got %v, want ErrDecrypt", err)
 	}
-	if _, err := repo.Get(ctx, a.ID); err != nil {
-		t.Fatalf("untouched row: %v", err)
+
+	// Swap two columns within one row.
+	r := &store.rows[0]
+	r.Name, r.Phone = r.Phone, r.Name
+	if _, err := repo.Get(ctx, a.ID); !errors.Is(err, crypto.ErrDecrypt) {
+		t.Fatalf("columns swapped: got %v, want ErrDecrypt", err)
 	}
 }
 
@@ -149,8 +159,38 @@ func TestSearchByPhone(t *testing.T) {
 	if !slices.Equal(got, ids) {
 		t.Fatalf("got %v, want %v in ID order", got, ids)
 	}
-	if _, err := repo.Search(ctx, "nope", "", 2); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("invalid phone: got %v, want ErrInvalid", err)
+	for name, tc := range map[string]struct {
+		phone, after string
+		limit        int
+	}{
+		"invalid phone":   {"nope", "", 2},
+		"zero limit":      {"+15551234567", "", 0},
+		"negative limit":  {"+15551234567", "", -1},
+		"limit too large": {"+15551234567", "", 101},
+		"malformed after": {"+15551234567", "garbage", 2},
+	} {
+		if _, err := repo.Search(ctx, tc.phone, tc.after, tc.limit); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: got %v, want ErrInvalid", name, err)
+		}
+	}
+}
+
+func TestSearchRejectsTamperedIndex(t *testing.T) {
+	ctx := context.Background()
+	repo, store := newRepo(t)
+	if _, err := repo.Create(ctx, ada); err != nil {
+		t.Fatal(err)
+	}
+	victim := ada
+	victim.Phone = "+447700900123"
+	if _, err := repo.Create(ctx, victim); err != nil {
+		t.Fatal(err)
+	}
+	// Someone with write access points the victim's index at Ada's number.
+	store.rows[1].PhoneIndex = store.rows[0].PhoneIndex
+	got, err := repo.Search(ctx, ada.Phone, "", 10)
+	if err == nil || len(got) != 0 {
+		t.Fatalf("got %d results, %v; want an error and no PII", len(got), err)
 	}
 }
 

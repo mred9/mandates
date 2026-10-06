@@ -63,7 +63,11 @@ func TestSealOpen(t *testing.T) {
 }
 
 func TestBlindIndex(t *testing.T) {
-	a, b := NewBlindIndex(key(4)), NewBlindIndex(key(5))
+	if _, err := NewBlindIndex(nil); err == nil {
+		t.Fatal("an empty blind-index key must be rejected")
+	}
+	a, _ := NewBlindIndex(key(4))
+	b, _ := NewBlindIndex(key(5))
 	if !bytes.Equal(a.Sum("+15551234567"), a.Sum("+15551234567")) {
 		t.Fatal("blind index must be deterministic")
 	}

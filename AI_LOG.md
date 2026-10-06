@@ -59,3 +59,16 @@ and what a reviewer should double-check. Edit freely.
 - `Argon2id.Verify` trusts the parameters in the stored hash. Stored hashes are ours, but an attacker who can write `password_hash` could set a huge `m` to make verification expensive.
 - `profile.open` uses a sticky-error closure to open three fields; check you find it readable.
 - The Postgres `Get` maps SQLSTATE `22P02` (bad UUID text) to `ErrNotFound`; that is intentional for Q2's uniform 404.
+
+**Pre-PR review (independent reviewer + security review)**
+- Security review: no findings.
+- Fixed:
+  - The row-binding test would have passed without row binding. It now moves a whole sealed row under another ID and swaps columns, and was checked by breaking `aad()`.
+  - argon2 `Verify` panicked on stored `t=0`/`p=0`; it now bounds all stored parameters.
+  - `Search` now validates `limit` and `after`, and checks each decrypted phone against the query, so a tampered index can't leak PII.
+  - `NewBlindIndex` requires a 32-byte key.
+  - `Credential` logs only its ID and method.
+  - `CreatedAt` is returned in UTC.
+  - Retry no longer sleeps after its last attempt; DESIGN now says retries cover writes only.
+- Deferred to #2: pin the CI actions and the CockroachDB image; SPEC §2 drift.
+- Dropped: `Validate` treating `[]byte{}` as unset (no caller produces it).

@@ -62,6 +62,7 @@ func Seal(key, plaintext, aad []byte) ([]byte, error) // AES-256-GCM, nonce||cip
 func Open(key, sealed, aad []byte) ([]byte, error)    // any failure → ErrDecrypt
 
 type BlindIndex struct{ /* HMAC-SHA256 key, separate from the KEK */ }
+func NewBlindIndex(key []byte) (*BlindIndex, error) // key ≥ 32 bytes
 func (b *BlindIndex) Sum(value string) []byte
 ```
 
@@ -93,6 +94,7 @@ type Store interface { // the ProfileStore
 func NewRepository(s Store, env crypto.Envelope, index *crypto.BlindIndex) *Repository
 func (r *Repository) Create(ctx context.Context, p Profile) (Profile, error)
 func (r *Repository) Get(ctx context.Context, id string) (Profile, error)
+// Search: limit 1..100, after "" or a UUID; each result's decrypted phone must equal the query.
 func (r *Repository) Search(ctx context.Context, phone, after string, limit int) ([]Profile, error)
 func NormalizePhone(s string) (string, error)
 ```
@@ -125,7 +127,7 @@ func (a Argon2id) Hash(password string) (string, error)
 func (Argon2id) Verify(password, encoded string) (bool, error) // constant-time compare
 ```
 
-Sentinels: `ErrNotFound`, `ErrInvalid`, `ErrConflict`.
+Sentinels: `ErrInvalid`, `ErrConflict`. `Credential` implements `slog.LogValuer` (ID and method only).
 
 ### 1.4 Data model
 
@@ -142,7 +144,7 @@ Sentinels: `ErrNotFound`, `ErrInvalid`, `ErrConflict`.
 
 ### 1.5 Stores
 
-- Each dialect exposes `Open(ctx, dsn)` plus `NewProfileStore` and `NewCredentialStore`:
+- Each dialect exposes `Open` (`postgres.Open(ctx, dsn)`, `sqlite.Open(ctx, path)`) plus `NewProfileStore` and `NewCredentialStore`:
   two types, so each can be handed a connection under a different database role.
 - `postgres.withRetry` re-runs a whole statement on SQLSTATE `40001` (up to 5 attempts, full
   jitter). `23505` → `ErrConflict`; a malformed UUID (`22P02`) → `ErrNotFound`.

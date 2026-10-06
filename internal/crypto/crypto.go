@@ -109,7 +109,14 @@ func newGCM(key []byte) (cipher.AEAD, error) {
 // normalise the value first; equal inputs give equal indexes.
 type BlindIndex struct{ key []byte }
 
-func NewBlindIndex(key []byte) *BlindIndex { return &BlindIndex{key: key} }
+// NewBlindIndex rejects short keys: a blank key from config would silently
+// produce an index anyone could brute-force.
+func NewBlindIndex(key []byte) (*BlindIndex, error) {
+	if len(key) < 32 {
+		return nil, errors.New("crypto: blind index key must be at least 32 bytes")
+	}
+	return &BlindIndex{key: key}, nil
+}
 
 func (b *BlindIndex) Sum(value string) []byte {
 	m := hmac.New(sha256.New, b.key)

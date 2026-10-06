@@ -7,11 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
 var (
-	ErrNotFound = errors.New("credential: not found")
 	ErrInvalid  = errors.New("credential: invalid")
 	ErrConflict = errors.New("credential: conflict")
 )
@@ -40,6 +40,11 @@ type Credential struct {
 	TOTPSecret     []byte // ciphertext under the DEK
 
 	CreatedAt time.Time
+}
+
+// LogValue keeps hashes and secret material out of logs.
+func (c Credential) LogValue() slog.Value {
+	return slog.GroupValue(slog.String("id", c.ID), slog.String("method", string(c.Method)))
 }
 
 // Store is the CredentialStore. It sits on its own table so it can be granted

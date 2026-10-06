@@ -46,7 +46,7 @@ stub showing where the real one plugs in.
 **AAD binds each ciphertext to its row and column.** Fields are sealed with AES-256-GCM and
 additional data `"<id>|<column>"`. Someone with write access to the database can't copy Alice's
 encrypted phone into Bob's row, or swap a name into the phone column, without decryption failing
-(`TestCiphertextIsBoundToItsRow`).
+(`TestCiphertextIsBoundToItsRowAndColumn`).
 
 **Phone search through an HMAC blind index.** Encrypted fields can't be queried. `phone_bidx` is
 HMAC-SHA256 of the E.164-normalised phone, under a key separate from the KEK. Equal numbers give
@@ -57,7 +57,10 @@ equal indexes, so search is an indexed equality lookup.
   share a phone number. It does not leak the number itself without the HMAC key. Only exact
   match is possible. No prefix, fuzzy or partial search, which I consider a feature for PII.
 - Phone numbers have low entropy, so if the HMAC key leaks, they can be brute-forced. Hence a
-  separate key, held in the key service like the KEK.
+  separate key of at least 32 bytes (`NewBlindIndex` refuses shorter ones), held in the key
+  service like the KEK.
+- The index column isn't authenticated, so `Search` checks each decrypted phone against the query.
+  Pointing a row's index at someone else's number returns an error, not their PII.
 
 **Credentials: the method is a type, and the schema enforces it.** `Method` is `password`,
 `passkey` or `totp`. Each method stores only what it needs:
@@ -73,15 +76,17 @@ method". The contract suite inserts a bad row with raw SQL to prove the database
 its own. Partial unique indexes allow one password per username but several passkeys per user.
 
 **argon2id, RFC 9106 parameters.** 64 MiB, t=3, p=4 by default. Verification compares in constant
-time. Tests use cheap parameters through the same type.
+time and bounds the parameters it reads from storage (`argon2.IDKey` panics on t=0 or p=0, and `m`
+is an allocation size). Tests use cheap parameters through the same type.
 
 **One pgx implementation for PostgreSQL and CockroachDB.** CockroachDB speaks the PostgreSQL wire
 protocol, and this schema is valid in both, so one package and one migration serve both. The
 difference that matters is concurrency. CockroachDB runs every transaction `SERIALIZABLE` and
 returns SQLSTATE `40001` when the client must retry. `postgres.withRetry` re-runs the whole
 statement with full-jitter backoff, up to 5 attempts, and returns any other error immediately.
-PostgreSQL returns the same code at `SERIALIZABLE`, so the wrapper is correct for both. The retry
-lives in the store layer, so callers never see a retryable error.
+PostgreSQL returns the same code at `SERIALIZABLE`, so the wrapper is correct for both. Writes go
+through it in the store layer; reads are single statements that CockroachDB retries server-side
+where it can. Wrapping reads too is a one-line change per query if contention shows up.
 
 **SQLite through `modernc.org/sqlite`.** It is pure Go, so there is no cgo, cross-compiling is
 trivial, and it runs under `-race`. Foreign keys are on, WAL is on, and `busy_timeout` is set.

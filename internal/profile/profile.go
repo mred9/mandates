@@ -122,11 +122,21 @@ func (r *Repository) Get(ctx context.Context, id string) (Profile, error) {
 	return r.open(ctx, s)
 }
 
+// MaxPageSize bounds Search so one call cannot return an unbounded result.
+const MaxPageSize = 100
+
 // Search is an exact match on phone through the blind index, paged by ID.
+// after is the last ID of the previous page, or "" for the first page.
 func (r *Repository) Search(ctx context.Context, phone, after string, limit int) ([]Profile, error) {
 	phone, err := NormalizePhone(phone)
 	if err != nil {
 		return nil, err
+	}
+	if limit < 1 || limit > MaxPageSize {
+		return nil, fmt.Errorf("%w: limit must be 1..%d", ErrInvalid, MaxPageSize)
+	}
+	if _, err := uuid.Parse(after); after != "" && err != nil {
+		return nil, fmt.Errorf("%w: malformed cursor", ErrInvalid)
 	}
 	rows, err := r.store.FindByPhoneIndex(ctx, r.index.Sum(phone), after, limit)
 	if err != nil {
@@ -137,6 +147,11 @@ func (r *Repository) Search(ctx context.Context, phone, after string, limit int)
 		p, err := r.open(ctx, s)
 		if err != nil {
 			return nil, err
+		}
+		// phone_bidx is not authenticated; check the decrypted phone so a
+		// tampered index cannot return someone else's PII.
+		if p.Phone != phone {
+			return nil, fmt.Errorf("profile: blind index does not match row %s", s.ID)
 		}
 		out = append(out, p)
 	}
@@ -160,7 +175,7 @@ func (r *Repository) open(ctx context.Context, s Sealed) (Profile, error) {
 		}
 		return plain
 	}
-	p := Profile{ID: s.ID, CreatedAt: s.CreatedAt, Name: string(field("name", s.Name)), Phone: string(field("phone", s.Phone))}
+	p := Profile{ID: s.ID, CreatedAt: s.CreatedAt.UTC(), Name: string(field("name", s.Name)), Phone: string(field("phone", s.Phone))}
 	addr := field("address", s.Address)
 	if err != nil {
 		return Profile{}, err

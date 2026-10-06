@@ -41,12 +41,13 @@ const maxAttempts = 5
 // withRetry re-runs fn when the database reports a serialization failure
 // (SQLSTATE 40001). CockroachDB runs every transaction SERIALIZABLE and asks
 // clients to retry; PostgreSQL returns the same code at SERIALIZABLE. Any other
-// error is returned at once. fn must be safe to repeat: a whole statement or
+// error is returned at once. Writes go through it; reads are single statements
+// that CockroachDB retries server-side where it can. fn must be safe to repeat: a whole statement or
 // a whole transaction, never half of one.
 func withRetry(ctx context.Context, fn func(context.Context) error) error {
 	var err error
 	for attempt := range maxAttempts {
-		if err = fn(ctx); !isCode(err, "40001") {
+		if err = fn(ctx); !isCode(err, "40001") || attempt == maxAttempts-1 {
 			return err
 		}
 		backoff := time.Duration(rand.Int64N(int64(5*time.Millisecond) << attempt)) // full jitter

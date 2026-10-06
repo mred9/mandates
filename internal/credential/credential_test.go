@@ -1,7 +1,9 @@
 package credential
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -35,8 +37,25 @@ func TestArgon2id(t *testing.T) {
 		}
 	}
 
-	if _, err := testHasher.Verify("x", "$argon2id$garbage"); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("malformed hash: got %v, want ErrInvalid", err)
+	for _, bad := range []string{
+		"$argon2id$garbage",
+		"$argon2id$v=19$m=1024,t=0,p=1$c2FsdHNhbHRzYWx0$aGFzaGhhc2hoYXNoaGFzaA", // t=0 panics inside argon2
+		"$argon2id$v=19$m=1024,t=1,p=0$c2FsdHNhbHRzYWx0$aGFzaGhhc2hoYXNoaGFzaA", // p=0 panics inside argon2
+		"$argon2id$v=19$m=4294967295,t=1,p=1$c2FsdHNhbHRzYWx0$aGFzaGhhc2hoYXNoaGFzaA",
+		"$argon2id$v=19$m=1024,t=1,p=1$$aGFzaGhhc2hoYXNoaGFzaA", // empty salt
+	} {
+		if _, err := testHasher.Verify("x", bad); !errors.Is(err, ErrInvalid) {
+			t.Errorf("Verify(%q): got %v, want ErrInvalid", bad, err)
+		}
+	}
+}
+
+func TestCredentialLogsWithoutSecrets(t *testing.T) {
+	var buf bytes.Buffer
+	c := Credential{ID: "c1", Username: "ada", Method: MethodPassword, PasswordHash: "$argon2id$secret"}
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("loaded", "credential", c)
+	if strings.Contains(buf.String(), "argon2id") || !strings.Contains(buf.String(), "c1") {
+		t.Fatalf("want ID only: %s", buf.String())
 	}
 }
 
