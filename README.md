@@ -35,12 +35,15 @@ CI (`.github/workflows/ci.yml`) runs the second form on every PR.
 ## Run the server
 
 ```sh
-go run ./cmd/server -dev            # SQLite at ./mandates.db, ephemeral keys; prints a profiles:read token
+export MANDATES_KEK=$(head -c32 /dev/urandom | base64) MANDATES_INDEX_KEY=$(head -c32 /dev/urandom | base64)
+go run ./cmd/server -dev            # SQLite at ./mandates.db; prints a profiles:read token
 curl -H "Authorization: Bearer $TOKEN" localhost:8080/v1/profiles/<id>
 curl -H "Authorization: Bearer $TOKEN" -d '{"phone":"+15551234567"}' localhost:8080/v1/profiles/search
 ```
 
-The API has no write endpoints; profiles are created through the DAO.
+Without the two keys, `-dev` generates ephemeral ones, so data from an earlier run can't be read.
+The API has no write endpoints: profiles are created through the DAO (`profile.Repository.Create`)
+with the same keys.
 
 ## Layout
 

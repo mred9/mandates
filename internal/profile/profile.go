@@ -118,6 +118,11 @@ func (r *Repository) Create(ctx context.Context, p Profile) (Profile, error) {
 }
 
 func (r *Repository) Get(ctx context.Context, id string) (Profile, error) {
+	// A malformed ID can't exist. Checking here gives every store the same
+	// answer; PostgreSQL would otherwise reject invalid UTF-8 with an error.
+	if _, err := uuid.Parse(id); err != nil {
+		return Profile{}, fmt.Errorf("profile: get: %w", ErrNotFound)
+	}
 	s, err := r.store.Get(ctx, id)
 	if err != nil {
 		return Profile{}, fmt.Errorf("profile: get: %w", err)

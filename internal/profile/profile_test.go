@@ -209,3 +209,20 @@ func TestProfileLogsWithoutPII(t *testing.T) {
 		}
 	}
 }
+
+// strictStore fails any Get it receives, like a database rejecting bytes it can't parse.
+type strictStore struct{ memStore }
+
+func (*strictStore) Get(context.Context, string) (Sealed, error) {
+	return Sealed{}, errors.New("store rejected the id")
+}
+
+func TestGetMalformedIDIsNotFoundWithoutTheStore(t *testing.T) {
+	repo, _ := newRepo(t)
+	repo.store = &strictStore{}
+	for _, id := range []string{"not-a-uuid", "\xff", "a\x00b", ""} {
+		if _, err := repo.Get(context.Background(), id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Get(%q) = %v, want ErrNotFound", id, err)
+		}
+	}
+}

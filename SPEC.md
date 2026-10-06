@@ -183,11 +183,11 @@ Every response sets `Cache-Control: no-store`.
 {"items": [ /* profiles */ ], "next_page_token": "..."}
 ```
 
-`page_size` defaults to 20, range 1..100. Unknown fields and trailing data are rejected.
+`page_size` omitted or 0 means 20; otherwise it must be 1..100. Unknown fields and trailing data are rejected.
 `page_token` is base64url of the last returned ID (a UUID, no PII); it is present when the page
 was full.
 
-**Error envelope** (every non-2xx; messages are fixed per code)
+**Error envelope** (every 4xx and 5xx; messages are fixed per code)
 
 ```json
 {"error": {"code": "not_found", "message": "resource not found", "request_id": "..."}}
@@ -202,7 +202,8 @@ was full.
 | `api.ErrRateLimited` | 429 + `Retry-After` | `rate_limited` |
 | anything else, including a panic | 500 | `internal` (details logged, not returned) |
 
-Malformed and non-existent IDs return byte-identical 404 bodies (apart from `request_id`).
+Malformed and non-existent IDs return byte-identical 404 bodies (apart from `request_id`):
+`profile.Repository.Get` returns `ErrNotFound` for anything that isn't a UUID without calling the store.
 `internal/api/errors.go` is the only place errors become statuses.
 
 ### 2.2 Auth
@@ -250,7 +251,8 @@ type Auditor interface { Record(ctx context.Context, e AuditEvent) error }
 ### 2.5 Logging and redaction
 
 - `api.NewLogger`: `slog.JSONHandler` with a `ReplaceAttr` that redacts a deny-list of keys
-  (`name`, `phone`, `address`, `password`, `token`, `authorization`, `secret`, …) at any group depth.
+  (`name`, `phone`, `address`, `password`, `token`, `authorization`, `secret`, …), matching an attribute's
+  own key or any enclosing group's key. It matches keys, not values.
 - `profile.Profile` and `profile.Address` implement `slog.LogValuer` (a profile logs only its ID).
 - Tested: requests carrying a known phone number produce logs that contain neither it nor the name.
 

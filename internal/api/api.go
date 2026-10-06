@@ -86,6 +86,7 @@ func (a *api) withRequestID(next http.Handler) http.Handler {
 			id = hex.EncodeToString(b)
 		}
 		w.Header().Set("X-Request-ID", id)
+		w.Header().Set("Cache-Control", "no-store") // responses carry PII
 		r.Body = http.MaxBytesReader(w, r.Body, MaxBodyBytes)
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, &reqState{id: id})))
 	})

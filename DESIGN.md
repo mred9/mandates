@@ -138,8 +138,9 @@ request ─▶ request ID ─▶ recover ─▶ access log ─▶ ServeMux ─�
 
 **Two read endpoints, nothing else.** `GET /v1/profiles/{id}` and `POST /v1/profiles/search`.
 The brief asks to search and retrieve; writes stay in the DAO. The server opens only the profile
-store, so in production the API connects under a role that can't read `user_credentials` (Q1's
-two-store split pays off here).
+store, so in production the API can connect under a role that can't read `user_credentials` (Q1's
+two-store split pays off here). That needs migrations run as a separate step: today `Open` migrates on
+start, which needs DDL rights on both tables.
 
 **Search is a POST.** A phone number in a query string ends up in access logs, proxy logs, browser
 history and `Referer` headers. In a body it ends up nowhere we don't control. The cost is that the
@@ -147,8 +148,9 @@ request isn't cacheable, which PII responses shouldn't be anyway (`Cache-Control
 response).
 
 **One 404 for "doesn't exist" and "malformed".** Distinct answers would let a caller probe which IDs
-exist and learn the ID format. Q1's stores already map a malformed ID to `ErrNotFound`, so the handler
-has one path; a test compares the two bodies byte for byte.
+exist and learn the ID format. `Repository.Get` returns `ErrNotFound` for anything that isn't a UUID
+before touching the store (PostgreSQL would otherwise reject `%FF` as invalid UTF-8 with an error, a
+500), so the handler has one path; a test compares the bodies byte for byte.
 
 **OAuth2 bearer tokens with scopes, behind an interface.** Callers are services, so this is the
 client-credentials model: the API checks a token and a scope (`profiles:read`) per route. The
@@ -177,7 +179,9 @@ from application logs.
 - The logger's `ReplaceAttr` redacts a deny-list of keys at any depth, as a backstop for a careless
   `log.Info("x", "phone", p)`.
 
-A test sends a known phone number and asserts it appears nowhere in the log output.
+A test sends a known phone number and asserts it appears nowhere in the log output. One path the
+layers don't cover: a 500 logs its error text, so errors must not carry PII. The stores' and the
+repository's errors don't; that is a convention to keep, not something the logger enforces.
 
 **Errors map in one place, with fixed messages.** `errors.go` turns sentinels into statuses. The
 client gets a code, a fixed message and the request ID, never the error text, which could carry

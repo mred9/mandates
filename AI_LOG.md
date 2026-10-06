@@ -94,3 +94,14 @@ and what a reviewer should double-check. Edit freely.
 - `ServeMux` sets `r.Pattern` on the request the access-log middleware holds; the route field depends on that (tested).
 - `limiter.wait` cancels a reservation it won't use, so a rejected request doesn't consume a token.
 - The redaction deny-list matches keys, not values: a PII value under an innocent key (`"q"`) would be logged. The LogValuers and the access log's no-body rule are the main defence.
+
+**Pre-PR review (independent reviewer + security review)**
+- Security review: no findings.
+- Fixed:
+  - On PostgreSQL, `GET /v1/profiles/%FF` (or `%00`) returned 500, not the uniform 404: Postgres rejects invalid UTF-8 (SQLSTATE 22021) before the UUID cast. Reproduced against compose Postgres; `Repository.Get` now returns `ErrNotFound` for any non-UUID without calling the store. The test was seen failing first.
+  - The log redaction missed grouped attributes (`slog.Group("address", ...)`, `WithGroup("phone")`): slog calls `ReplaceAttr` on group members, not the group. It now checks enclosing group keys too, and lists the remaining address subfields.
+  - `Cache-Control: no-store` is now set in middleware, so it covers every response as SPEC says.
+  - Docs: `page_size` 0 means the default; the envelope covers 4xx/5xx; the credentials-role claim notes that migrations need a separate step; a 500's error text is logged; README explains the keys.
+  - The internal-error test no longer uses a password-shaped marker.
+- Verified `cmd/server -db postgres` against compose Postgres (start, get, search, SIGTERM).
+- Deferred to #5: access log on panic, `-rate` validation, second-signal exit, per-request timeout, server-side audit request ID, `SlogAuditor` test, 403 `WWW-Authenticate`.

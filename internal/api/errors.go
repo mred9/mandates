@@ -46,7 +46,6 @@ func writeError(w http.ResponseWriter, r *http.Request, log *slog.Logger, err er
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store") // responses carry PII
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }

@@ -150,12 +150,14 @@ func TestGetProfile(t *testing.T) { // AC1
 	}
 
 	unknown := f.do("GET", "/v1/profiles/0192f2c4-0000-7000-8000-000000000000", "", "X-Request-ID", "same")
-	malformed := f.do("GET", "/v1/profiles/not-a-uuid", "", "X-Request-ID", "same")
-	if unknown.Code != 404 || malformed.Code != 404 || errCode(t, unknown) != "not_found" {
-		t.Fatalf("statuses %d, %d: %s", unknown.Code, malformed.Code, unknown.Body)
+	if unknown.Code != 404 || errCode(t, unknown) != "not_found" {
+		t.Fatalf("unknown: %d %s", unknown.Code, unknown.Body)
 	}
-	if !bytes.Equal(unknown.Body.Bytes(), malformed.Body.Bytes()) {
-		t.Errorf("404 bodies differ:\n%s\n%s", unknown.Body, malformed.Body)
+	for _, id := range []string{"not-a-uuid", "%FF", "a%00b"} {
+		malformed := f.do("GET", "/v1/profiles/"+id, "", "X-Request-ID", "same")
+		if malformed.Code != 404 || !bytes.Equal(unknown.Body.Bytes(), malformed.Body.Bytes()) {
+			t.Errorf("%s: %d, body differs:\n%s\n%s", id, malformed.Code, unknown.Body, malformed.Body)
+		}
 	}
 }
 
@@ -316,7 +318,10 @@ func TestLogsCarryNoPII(t *testing.T) { // AC7
 	f.do("POST", "/v1/profiles/search", `{"phone":"+1 555 123 4567"}`, "Authorization", "Bearer junk")
 
 	// Even a careless log call is redacted by key, at any depth.
-	NewLogger(f.logs).Info("oops", "phone", "+15551234567", slog.Group("user", "name", "Ada Lovelace"), "authorization", "Bearer "+f.token)
+	log := NewLogger(f.logs)
+	log.Info("oops", "phone", "+15551234567", slog.Group("user", "name", "Ada Lovelace"), "authorization", "Bearer "+f.token)
+	log.Info("oops", slog.Group("address", "locality", "London"))
+	log.WithGroup("phone").Info("oops", "number", "+15551234567")
 
 	out := f.logs.String()
 	for _, secret := range []string{"5551234567", "555 123 4567", "Ada Lovelace", "London", f.token} {
@@ -348,7 +353,7 @@ type panicky struct{}
 
 func (panicky) Get(context.Context, string) (profile.Profile, error) { panic("boom") }
 func (panicky) Search(context.Context, string, string, int) ([]profile.Profile, error) {
-	return nil, errors.New("dial db: password=hunter2")
+	return nil, errors.New("dial db: marker-xyz")
 }
 
 func TestInternalErrors(t *testing.T) { // AC8
@@ -357,11 +362,11 @@ func TestInternalErrors(t *testing.T) { // AC8
 		f.do("GET", "/v1/profiles/x", ""),
 		f.do("POST", "/v1/profiles/search", `{"phone":"+15551234567"}`),
 	} {
-		if w.Code != 500 || errCode(t, w) != "internal" || strings.Contains(w.Body.String(), "hunter2") {
+		if w.Code != 500 || errCode(t, w) != "internal" || strings.Contains(w.Body.String(), "marker-xyz") {
 			t.Errorf("status %d: %s", w.Code, w.Body)
 		}
 	}
-	if !strings.Contains(f.logs.String(), "hunter2") || !strings.Contains(f.logs.String(), "boom") {
+	if !strings.Contains(f.logs.String(), "marker-xyz") || !strings.Contains(f.logs.String(), "boom") {
 		t.Errorf("details should be logged:\n%s", f.logs)
 	}
 }
@@ -372,7 +377,7 @@ func TestUnknownRouteUsesEnvelope(t *testing.T) {
 	if w.Code != 404 || errCode(t, w) != "not_found" {
 		t.Errorf("status %d: %s", w.Code, w.Body)
 	}
-	if w := f.do("GET", "/healthz", "", "Authorization", ""); w.Code != 200 {
-		t.Errorf("healthz: %d", w.Code)
+	if w := f.do("GET", "/healthz", "", "Authorization", ""); w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" {
+		t.Errorf("healthz: %d, Cache-Control %q", w.Code, w.Header().Get("Cache-Control"))
 	}
 }
