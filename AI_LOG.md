@@ -120,7 +120,7 @@ and what a reviewer should double-check. Edit freely.
 **Produced**
 - `internal/provider`: `IdentityProvider`, `Identity`, sentinels, `Secrets` (`StaticSecrets`, `VaultSecrets` stub), `VendorConfig` with defaults; `TokenCache` (early refresh, singleflight, `Invalidate(stale)`); `Breaker` and `Do` (per-attempt timeout, full-jitter retry on transient failures, `Retry-After` capped at `BackoffMax`); `Client`, the shared HTTP half (auth, 401 re-auth once, status mapping, https-only base URL, no redirects, 1 MiB body cap, normalisation).
 - `abc` and `xyz`: encode and decode only, plus thin fakes over the shared `providertest.Fake`.
-- Tests: every resilience test runs against both vendors; each `decode` is tested against literal JSON. 22 tests.
+- Tests: every resilience test runs against both vendors; each `decode` is tested against literal JSON. 23 tests.
 - TDD: tests written against a compile-only skeleton and seen failing (19 tests) before the code. Teeth checks: removing singleflight, the stale-token check in `Invalidate`, breaker counting, the single half-open probe, `Retry-After`, the caller-cancel check, the 401 refresh, the body cap, the https check, the transient classification and the `/auth` 404 mapping each broke a test.
 - SPEC §3 as built, DESIGN Q3, README status and layout.
 
@@ -153,3 +153,6 @@ and what a reviewer should double-check. Edit freely.
 - Fixed: the one re-auth on a 401 reset on every retry attempt, so `401, 503, 401` re-authenticated twice instead of returning `ErrUnauthorized`; it is now once per lookup. Test failed first.
 - Fixed: the 1 MiB cap only truncated, so a valid answer padded past 1 MiB with whitespace was accepted; over-limit answers are now rejected explicitly (restoring the check I had removed as redundant). Test failed first.
 - Docs: `Timeout` covers a whole attempt (token fetch, `/identity`, re-auth), not each HTTP request; that bounds an attempt's total time, so the docs now say so rather than the code changing.
+
+**Copilot round 2 (at the user's direction)**
+- Fixed: a `Secrets` error was passed through as text, so a real Vault client whose error quotes a token would put it in lookup errors and logs. I first deferred it (no current implementation leaks); the user judged the consequence of forgetting too high. It is now a fixed "credentials unavailable" error; a store that hits the attempt timeout still returns the context error, so the attempt is retried. Test failed first; both branches checked by breaking them.

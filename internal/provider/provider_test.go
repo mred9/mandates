@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -498,6 +500,45 @@ func TestOversizedAnswerIsRejectedEvenIfItDecodes(t *testing.T) {
 	}
 	if _, err := p.Lookup(context.Background(), adaLookup); !errors.Is(err, provider.ErrUnavailable) {
 		t.Fatalf("got %v, want ErrUnavailable", err)
+	}
+}
+
+// leakySecrets is a secret store whose errors quote what they shouldn't.
+// With slow set, it waits for the context and counts its calls.
+type leakySecrets struct {
+	err   error
+	slow  bool
+	calls *atomic.Int32
+}
+
+func (l leakySecrets) VendorCredentials(ctx context.Context, _ string) (provider.Credentials, error) {
+	if l.slow {
+		l.calls.Add(1)
+		<-ctx.Done()
+		return provider.Credentials{}, fmt.Errorf("vault: %w (token hvs.LEAKED-TOKEN)", ctx.Err())
+	}
+	return provider.Credentials{}, l.err
+}
+
+func TestSecretStoreErrorsAreNotPassedOn(t *testing.T) {
+	f := abc.NewFake(t, ada)
+	p, err := abc.New(provider.VendorConfig{BaseURL: f.URL, BackoffBase: time.Millisecond},
+		leakySecrets{err: errors.New("vault: permission denied for token hvs.LEAKED-TOKEN")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.Lookup(context.Background(), adaLookup)
+	if err == nil || strings.Contains(err.Error(), "LEAKED-TOKEN") {
+		t.Fatalf("got %v, want an error without the secret store's text", err)
+	}
+
+	// A secret store slower than the attempt timeout is a timed-out attempt: retried.
+	calls := new(atomic.Int32)
+	p, _ = abc.New(provider.VendorConfig{BaseURL: f.URL, BackoffBase: time.Millisecond, Timeout: 20 * time.Millisecond, MaxAttempts: 2},
+		leakySecrets{slow: true, calls: calls})
+	_, err = p.Lookup(context.Background(), adaLookup)
+	if !errors.Is(err, provider.ErrUnavailable) || calls.Load() != 2 || strings.Contains(err.Error(), "LEAKED-TOKEN") {
+		t.Fatalf("slow store: got %v after %d calls, want ErrUnavailable after 2 and no store text", err, calls.Load())
 	}
 }
 

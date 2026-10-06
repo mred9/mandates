@@ -145,7 +145,11 @@ func classify(op string, status int, h http.Header) error {
 func (c *Client) authenticate(ctx context.Context) (Token, error) {
 	creds, err := c.secrets.VendorCredentials(ctx, c.cfg.SecretName)
 	if err != nil {
-		return Token{}, fmt.Errorf("credentials: %w", err)
+		if ctx.Err() != nil {
+			return Token{}, ctx.Err()
+		}
+		// Not err: a secret store's error text may quote a token or secret.
+		return Token{}, fmt.Errorf("credentials %q unavailable", c.cfg.SecretName)
 	}
 	status, h, body, err := c.post(ctx, "/auth", "", map[string]string{"username": creds.Username, "password": creds.Password})
 	if err != nil {

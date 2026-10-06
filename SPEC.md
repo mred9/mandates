@@ -351,7 +351,7 @@ func New(vendor string, cfg VendorConfig, s Secrets, enc Encoder, dec Decoder) (
 `/auth` uses the same mapping, so bad credentials are an `ErrUnauthorized` and are never retried,
 except that a 400, 404 or 422 from `/auth` is `ErrUnavailable`: it isn't the lookup's "bad input" or "no match".
 The client follows no redirects. Errors carry the vendor, operation and status, never a request,
-a response body, a token or credentials.
+a response body, a token, credentials or the secret store's error text.
 
 Sentinels: `ErrNotFound`, `ErrInvalidRequest`, `ErrUnauthorized`, `ErrUnavailable`, `ErrCircuitOpen`.
 

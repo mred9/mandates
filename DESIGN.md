@@ -274,7 +274,8 @@ read with the service's own Vault identity, so credentials are never in config, 
 and rotating them is a Vault write. `Credentials`, `Token`, `LookupRequest` and `Identity` all
 redact themselves when logged. Errors carry the vendor, the operation and the status, never a
 request, a response body, a token or a password: a JSON decode error, for instance, is replaced
-with a fixed "malformed response" because it can quote the body. A test collects the errors from
+with a fixed "malformed response" because it can quote the body, and a secret store's error is
+replaced with "credentials unavailable" because a Vault error can quote a token or path. A test collects the errors from
 the main failure paths (bad credentials, exhausted retries, bad request, rejected token, no match,
 oversized answer) and checks none contains the password, a token, the phone or the name.
 
