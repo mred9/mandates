@@ -12,12 +12,11 @@ import (
 // NewFake serves XYZ's wire format: {"data": {...}}, or {"data": null} for no match.
 func NewFake(t testing.TB, people ...provider.Identity) *providertest.Fake {
 	return providertest.New(t, func(w http.ResponseWriter, id *provider.Identity) {
-		var resp response
+		var p *person
 		if id != nil {
 			a := id.Address
-			resp.Data = &person{id.Name, id.Phone,
-				address{a.StreetAddress, a.Locality, a.Region, a.PostalCode, a.Country}}
+			p = &person{id.Name, id.Phone, address{a.StreetAddress, a.Locality, a.Region, a.PostalCode, a.Country}}
 		}
-		json.NewEncoder(w).Encode(resp)
+		json.NewEncoder(w).Encode(map[string]*person{"data": p})
 	}, people...)
 }

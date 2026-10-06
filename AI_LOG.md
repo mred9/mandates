@@ -120,7 +120,7 @@ and what a reviewer should double-check. Edit freely.
 **Produced**
 - `internal/provider`: `IdentityProvider`, `Identity`, sentinels, `Secrets` (`StaticSecrets`, `VaultSecrets` stub), `VendorConfig` with defaults; `TokenCache` (early refresh, singleflight, `Invalidate(stale)`); `Breaker` and `Do` (per-attempt timeout, full-jitter retry on transient failures, `Retry-After` capped at `BackoffMax`); `Client`, the shared HTTP half (auth, 401 re-auth once, status mapping, https-only base URL, no redirects, 1 MiB body cap, normalisation).
 - `abc` and `xyz`: encode and decode only, plus thin fakes over the shared `providertest.Fake`.
-- Tests: every resilience test runs against both vendors; each `decode` is tested against literal JSON. 20 tests.
+- Tests: every resilience test runs against both vendors; each `decode` is tested against literal JSON. 21 tests.
 - TDD: tests written against a compile-only skeleton and seen failing (19 tests) before the code. Teeth checks: removing singleflight, the stale-token check in `Invalidate`, breaker counting, the single half-open probe, `Retry-After`, the caller-cancel check, the 401 refresh, the body cap, the https check, the transient classification and the `/auth` 404 mapping each broke a test.
 - SPEC §3 as built, DESIGN Q3, README status and layout.
 
@@ -135,3 +135,16 @@ and what a reviewer should double-check. Edit freely.
 - `TokenCache` runs the shared fetch under the first caller's context (DESIGN trade-off).
 - Bad credentials cost one `/auth` call per lookup, because `ErrUnauthorized` doesn't trip the breaker.
 - `Retry-After` as an HTTP date uses the wall clock, not `VendorConfig.Now`.
+
+**Pre-PR review (independent reviewer + security review)**
+- Security review: no findings.
+- Fixed:
+  - AC6 and AC7 had untested clauses: the breaker test now includes a vendor 400 (it must not count), and a test reads credentials under a `SecretName` different from the vendor name. Both were checked by breaking the line they guard.
+  - `Retry-After` below `BackoffMax` is now tested as waited in full, not just capped.
+  - Exhausted retries on attempt timeouts also matched `context.DeadlineExceeded`, so they read as the caller's timeout; the last error is now included as text only. Test failed first.
+  - XYZ read a 200 body without a `data` field (`{}`, `{"error":...}`) as "no match"; it is now malformed. Test failed first.
+  - The token cache checks again inside the shared fetch, so a caller arriving just after a refresh doesn't start a second `/auth`.
+  - A non-alpha-2 country from a vendor is now tested as rejected; the breaker test checks that a success really closes it.
+  - Doc wording in SPEC §3, DESIGN and the fake.
+- Deferred to #8: waiters on a shared token fetch ignore their own context; reuse a still-valid token when an early refresh fails; a second half-open probe in a narrow race; an XYZ 404 counting as "no match".
+- Dropped: `fmt` printing of the redacting types (same as `profile.Profile`, nothing prints them); fakes in the adapter packages (planned in SPEC); negative config values (operator config only).

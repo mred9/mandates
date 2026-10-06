@@ -1,5 +1,5 @@
 // Package providertest is an httptest stand-in for an identity provider: the
-// /auth and /identity protocol, token expiry and injectable failures. Each
+// /auth and /identity protocol, token TTLs and injectable failures. Each
 // vendor's fake supplies only its identity response body.
 package providertest
 

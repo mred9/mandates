@@ -21,4 +21,9 @@ func TestDecode(t *testing.T) {
 	if _, err := decode([]byte(`{"data":null}`)); !errors.Is(err, provider.ErrNotFound) {
 		t.Fatalf("null data: got %v, want ErrNotFound", err)
 	}
+	for _, body := range []string{`{}`, `{"error":"quota exceeded"}`} { // not an answer, so not "no match"
+		if _, err := decode([]byte(body)); err == nil || errors.Is(err, provider.ErrNotFound) {
+			t.Errorf("%s: got %v, want a malformed-response error", body, err)
+		}
+	}
 }

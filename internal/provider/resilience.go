@@ -98,7 +98,8 @@ func attempt(ctx context.Context, cfg VendorConfig, call func(ctx context.Contex
 			return err
 		}
 	}
-	return fmt.Errorf("%w after %d attempts: %w", ErrUnavailable, cfg.MaxAttempts, err)
+	// %v, not %w: an attempt's own timeout must not read as the caller's context error.
+	return fmt.Errorf("%w after %d attempts: %v", ErrUnavailable, cfg.MaxAttempts, err)
 }
 
 // backoff is the vendor's Retry-After if it sent one, else full jitter, both capped at BackoffMax.

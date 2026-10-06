@@ -24,6 +24,9 @@ var ada = provider.Identity{
 
 var adaLookup = provider.LookupRequest{Phone: "+44 (20) 7946-0958", Name: "Ada Lovelace"}
 
+// threeLetters is in every fake with a country code that isn't ISO alpha-2.
+var threeLetters = provider.Identity{Name: "Bad Country", Phone: "+15550003333", Address: provider.Address{Country: "GBR"}}
+
 type vendor struct {
 	name string
 	fake func(testing.TB, ...provider.Identity) *providertest.Fake
@@ -53,7 +56,7 @@ type env struct {
 func forEachVendor(t *testing.T, cfg provider.VendorConfig, fn func(t *testing.T, e env)) {
 	for _, v := range vendors {
 		t.Run(v.name, func(t *testing.T) {
-			f := v.fake(t, ada)
+			f := v.fake(t, ada, threeLetters)
 			c := &clock{t: time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)}
 			cfg := cfg
 			cfg.BaseURL, cfg.Now = f.URL, c.Now
@@ -91,6 +94,11 @@ func TestLookupMapsVendorAnswer(t *testing.T) {
 		_, err = e.p.Lookup(context.Background(), provider.LookupRequest{Phone: "+15550001111", Name: "Nobody"})
 		if !errors.Is(err, provider.ErrNotFound) {
 			t.Fatalf("no match: got %v, want ErrNotFound", err)
+		}
+
+		_, err = e.p.Lookup(context.Background(), provider.LookupRequest{Phone: threeLetters.Phone, Name: threeLetters.Name})
+		if !errors.Is(err, provider.ErrUnavailable) {
+			t.Fatalf("country %q: got %v, want ErrUnavailable", threeLetters.Address.Country, err)
 		}
 	})
 }
@@ -180,6 +188,22 @@ func TestBadCredentialsAreNotRetried(t *testing.T) {
 	}
 }
 
+func TestCredentialsReadBySecretName(t *testing.T) {
+	for _, v := range vendors {
+		t.Run(v.name, func(t *testing.T) {
+			f := v.fake(t, ada)
+			p, err := v.new(provider.VendorConfig{BaseURL: f.URL, SecretName: "idp/" + v.name + "-prod"},
+				provider.StaticSecrets{"idp/" + v.name + "-prod": providertest.Creds})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := p.Lookup(context.Background(), adaLookup); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestStaleTokenIsRefreshedOnce(t *testing.T) {
 	forEachVendor(t, provider.VendorConfig{}, func(t *testing.T, e env) {
 		lookup(t, e)
@@ -222,23 +246,31 @@ func TestTransientFailuresAreRetried(t *testing.T) {
 }
 
 func TestRetryAfterIsHonouredUpToBackoffMax(t *testing.T) {
-	forEachVendor(t, provider.VendorConfig{BackoffMax: 80 * time.Millisecond}, func(t *testing.T, e env) {
-		lookup(t, e)
-		e.fake.Fail("/identity", 1, 429, "10")
-		start := time.Now()
-		lookup(t, e)
-		// Backoff alone would wait at most BackoffBase (1ms); Retry-After asks for 10s.
-		if d := time.Since(start); d < 80*time.Millisecond || d > 2*time.Second {
-			t.Fatalf("waited %v, want Retry-After capped at 80ms", d)
-		}
-	})
+	// Backoff alone would wait at most BackoffBase (1ms).
+	for _, tc := range []struct {
+		backoffMax, min, max time.Duration
+	}{
+		{80 * time.Millisecond, 80 * time.Millisecond, 900 * time.Millisecond}, // asks 1s, capped
+		{5 * time.Second, time.Second, 2 * time.Second},                        // asks 1s, waits 1s
+	} {
+		forEachVendor(t, provider.VendorConfig{BackoffMax: tc.backoffMax}, func(t *testing.T, e env) {
+			lookup(t, e)
+			e.fake.Fail("/identity", 1, 429, "1")
+			start := time.Now()
+			lookup(t, e)
+			if d := time.Since(start); d < tc.min || d > tc.max {
+				t.Fatalf("BackoffMax %v: waited %v, want %v..%v", tc.backoffMax, d, tc.min, tc.max)
+			}
+		})
+	}
 }
 
 func TestSlowAttemptsTimeOutAndAreRetried(t *testing.T) {
 	forEachVendor(t, provider.VendorConfig{Timeout: 50 * time.Millisecond}, func(t *testing.T, e env) {
 		e.fake.SetLatency(time.Second)
-		if _, err := e.p.Lookup(context.Background(), adaLookup); !errors.Is(err, provider.ErrUnavailable) {
-			t.Fatalf("got %v, want ErrUnavailable", err)
+		_, err := e.p.Lookup(context.Background(), adaLookup)
+		if !errors.Is(err, provider.ErrUnavailable) || errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("got %v, want ErrUnavailable and not the caller's context error", err)
 		}
 		if n := e.fake.IdentityCalls(); n != 3 {
 			t.Fatalf("/identity called %d times, want 3", n)
@@ -311,12 +343,18 @@ func TestBreakerOpensAndRecovers(t *testing.T) {
 				t.Fatalf("got %v, want ErrUnavailable", err)
 			}
 		}
+		// Answers from a healthy vendor reset the count: each fail() below is failure 1 of 2.
 		fail()
 		if _, err := e.p.Lookup(ctx, provider.LookupRequest{Phone: "+15550001111", Name: "Nobody"}); !errors.Is(err, provider.ErrNotFound) {
 			t.Fatalf("got %v, want ErrNotFound", err)
 		}
-		fail() // the not-found answer reset the count: this is failure 1 of 2
 		fail()
+		e.fake.Fail("/identity", 1, 400, "")
+		if _, err := e.p.Lookup(ctx, adaLookup); !errors.Is(err, provider.ErrInvalidRequest) {
+			t.Fatalf("got %v, want ErrInvalidRequest", err)
+		}
+		fail()
+		fail() // 2 of 2: open
 
 		before := e.fake.IdentityCalls()
 		if _, err := e.p.Lookup(ctx, adaLookup); !errors.Is(err, provider.ErrCircuitOpen) {
@@ -328,6 +366,7 @@ func TestBreakerOpensAndRecovers(t *testing.T) {
 
 		e.clock.Advance(time.Minute)
 		lookup(t, e) // the half-open probe succeeds and closes the breaker
+		fail()       // so one failure is only 1 of 2
 		lookup(t, e)
 	})
 }

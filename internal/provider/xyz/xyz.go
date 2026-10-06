@@ -4,6 +4,7 @@ package xyz
 
 import (
 	"encoding/json"
+	"errors"
 
 	"github.com/mred9/mandates/internal/provider"
 )
@@ -30,7 +31,7 @@ type person struct {
 }
 
 type response struct {
-	Data *person `json:"data"` // null means no match
+	Data json.RawMessage `json:"data"` // null means no match; absent means a malformed answer
 }
 
 func New(cfg provider.VendorConfig, s provider.Secrets) (*provider.Client, error) {
@@ -46,10 +47,17 @@ func decode(body []byte) (provider.Identity, error) {
 		return provider.Identity{}, err
 	}
 	if r.Data == nil {
+		return provider.Identity{}, errors.New("xyz: no data field")
+	}
+	var p *person
+	if err := json.Unmarshal(r.Data, &p); err != nil {
+		return provider.Identity{}, err
+	}
+	if p == nil {
 		return provider.Identity{}, provider.ErrNotFound
 	}
-	a := r.Data.Address
-	return provider.Identity{Name: r.Data.FullName, Phone: r.Data.PhoneNumber, Address: provider.Address{
+	a := p.Address
+	return provider.Identity{Name: p.FullName, Phone: p.PhoneNumber, Address: provider.Address{
 		StreetAddress: a.Line1, Locality: a.City, Region: a.State, PostalCode: a.Zip, Country: a.CountryCode,
 	}}, nil
 }

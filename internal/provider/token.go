@@ -37,13 +37,14 @@ func NewTokenCache(fetch TokenFetcher, refreshBefore time.Duration, now func() t
 // Token returns the cached token, or fetches one. The fetch runs under the
 // first caller's context; callers sharing it get its error too.
 func (c *TokenCache) Token(ctx context.Context) (string, error) {
-	c.mu.Lock()
-	tok := c.tok
-	c.mu.Unlock()
-	if tok.AccessToken != "" && c.now().Before(tok.ExpiresAt.Add(-c.refreshBefore)) {
-		return tok.AccessToken, nil
+	if tok := c.usable(); tok != "" {
+		return tok, nil
 	}
 	v, err, _ := c.group.Do("token", func() (any, error) {
+		// A caller arriving just after a shared fetch finished finds the new token here.
+		if tok := c.usable(); tok != "" {
+			return tok, nil
+		}
 		fresh, err := c.fetch(ctx)
 		if err != nil {
 			return nil, err
@@ -57,6 +58,16 @@ func (c *TokenCache) Token(ctx context.Context) (string, error) {
 		return "", err
 	}
 	return v.(string), nil
+}
+
+// usable returns the cached token if it is outside the refresh window, else "".
+func (c *TokenCache) usable() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.tok.AccessToken != "" && c.now().Before(c.tok.ExpiresAt.Add(-c.refreshBefore)) {
+		return c.tok.AccessToken
+	}
+	return ""
 }
 
 // Invalidate drops the cached token if it is still stale, so a caller that

@@ -340,7 +340,7 @@ func New(vendor string, cfg VendorConfig, s Secrets, enc Encoder, dec Decoder) (
 | Vendor status | Result | Retried |
 |---|---|---|
 | 200 | decoded identity | |
-| 401, 403 (after the one refresh) | `ErrUnauthorized` | no |
+| 401 (after the one refresh), 403 | `ErrUnauthorized` | no |
 | 404 | `ErrNotFound` | no |
 | 400, 422 | `ErrInvalidRequest` | no |
 | 429, 502, 503, 504, network error, attempt timeout | `ErrUnavailable` once attempts run out | yes; `Retry-After` honoured up to `BackoffMax` |
@@ -349,7 +349,7 @@ func New(vendor string, cfg VendorConfig, s Secrets, enc Encoder, dec Decoder) (
 | breaker open | `ErrCircuitOpen` | no vendor call |
 
 `/auth` uses the same mapping, so bad credentials are an `ErrUnauthorized` and are never retried,
-except that a 400 or 404 from `/auth` is `ErrUnavailable`: it isn't the lookup's "bad input" or "no match".
+except that a 400, 404 or 422 from `/auth` is `ErrUnavailable`: it isn't the lookup's "bad input" or "no match".
 The client follows no redirects. Errors carry the vendor, operation and status, never a request,
 a response body, a token or credentials.
 
@@ -366,7 +366,7 @@ assume ABC uses it verbatim and XYZ differs:
 | `POST /auth` response | `{"access_token","expires_in"}` | same |
 | `POST /identity` request | `{"phone","name"}` | same |
 | `POST /identity` response | `{"name","phone","address":{"street_address","locality","region","postal_code","country"}}` | `{"data":{"full_name","phone_number","address":{"line1","city","state","zip","country_code"}}}` |
-| not found | 404 | 200 with `{"data":null}` |
+| not found | 404 | 200 with `{"data":null}` (a body with no `data` field is malformed) |
 
 ### 3.3 Fakes
 
