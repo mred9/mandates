@@ -30,7 +30,7 @@ CI (`.github/workflows/ci.yml`) runs the second form on every PR.
 |---|---|---|
 | Q1 DAO | profile repository with per-row envelope encryption and phone blind index; argon2id passwords; credential model for password, passkey and TOTP; SQLite and pgx (PostgreSQL + CockroachDB) stores; CockroachDB retry; one contract suite on all three | Vault transit envelope (`TODO` stub); profile update/delete; key rotation; versioned migration runner |
 | Q2 API | profile get and search; scoped bearer auth; per-client rate limit; audit (fail closed); PII-free logs; server with timeouts and graceful shutdown | real token verifier (JWT/introspection); production keys via Vault; edge rate limiting |
-| Q3 Connector | not started | |
+| Q3 Connector | `IdentityProvider` for ABC and XYZ; token cache with early refresh and singleflight; 401 re-auth; retry with jitter and `Retry-After`; circuit breaker; credentials from `Secrets`; shared httptest fake, tests on both vendors | Vault secrets (`TODO` stub); real vendor endpoints; not exposed through the API |
 
 ## Run the server
 
@@ -56,4 +56,8 @@ internal/credential/       Credential model, Store interface, argon2id hasher
 internal/store/storetest/  the contract suite every store runs
 internal/store/sqlite/     SQLite stores and migration
 internal/store/postgres/   PostgreSQL/CockroachDB stores, migration, 40001 retry
+internal/provider/         identity provider connector: client, token cache, retry, breaker, secrets
+internal/provider/abc/     ABC adapter and fake
+internal/provider/xyz/     XYZ adapter and fake
+internal/provider/providertest/  the shared httptest vendor fake
 ```

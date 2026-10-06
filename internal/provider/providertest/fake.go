@@ -31,7 +31,7 @@ type Fake struct {
 	people        map[string]provider.Identity // by E.164 phone
 	tokenTTL      int                          // expires_in seconds; 0 omits the field
 	tokens        []string
-	fails         []fail
+	fails         map[string][]fail // by path
 	latency       time.Duration
 	authDelay     time.Duration
 	authCalls     int
@@ -44,7 +44,7 @@ type fail struct {
 }
 
 func New(t testing.TB, write Writer, people ...provider.Identity) *Fake {
-	f := &Fake{write: write, people: map[string]provider.Identity{}, tokenTTL: 3600}
+	f := &Fake{write: write, people: map[string]provider.Identity{}, fails: map[string][]fail{}, tokenTTL: 3600}
 	for _, p := range people {
 		phone, err := profile.NormalizePhone(p.Phone)
 		if err != nil {
@@ -63,13 +63,32 @@ func New(t testing.TB, write Writer, people ...provider.Identity) *Fake {
 // SetTokenTTL sets expires_in on issued tokens; 0 omits it.
 func (f *Fake) SetTokenTTL(seconds int) { f.mu.Lock(); f.tokenTTL = seconds; f.mu.Unlock() }
 
-// Fail makes the next n /identity calls answer status, with Retry-After when set.
-func (f *Fake) Fail(n, status int, retryAfter string) {
+// Fail makes the next n calls to path ("/auth" or "/identity") answer status,
+// with Retry-After when set.
+func (f *Fake) Fail(path string, n, status int, retryAfter string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for range n {
-		f.fails = append(f.fails, fail{status, retryAfter})
+		f.fails[path] = append(f.fails[path], fail{status, retryAfter})
 	}
+}
+
+// injected pops the next injected failure for r's path and writes it.
+func (f *Fake) injected(w http.ResponseWriter, r *http.Request) bool {
+	f.mu.Lock()
+	q := f.fails[r.URL.Path]
+	if len(q) == 0 {
+		f.mu.Unlock()
+		return false
+	}
+	next := q[0]
+	f.fails[r.URL.Path] = q[1:]
+	f.mu.Unlock()
+	if next.retryAfter != "" {
+		w.Header().Set("Retry-After", next.retryAfter)
+	}
+	w.WriteHeader(next.status)
+	return true
 }
 
 // SetLatency delays every /identity answer.
@@ -93,7 +112,7 @@ func (f *Fake) auth(w http.ResponseWriter, r *http.Request) {
 	f.authCalls++
 	delay, ttl := f.authDelay, f.tokenTTL
 	f.mu.Unlock()
-	if !sleep(r, delay) {
+	if !sleep(r, delay) || f.injected(w, r) {
 		return
 	}
 	var c struct{ Username, Password string }
@@ -118,19 +137,8 @@ func (f *Fake) identity(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.identityCalls++
 	latency := f.latency
-	var injected *fail
-	if len(f.fails) > 0 {
-		injected, f.fails = &f.fails[0], f.fails[1:]
-	}
 	f.mu.Unlock()
-	if !sleep(r, latency) {
-		return
-	}
-	if injected != nil {
-		if injected.retryAfter != "" {
-			w.Header().Set("Retry-After", injected.retryAfter)
-		}
-		w.WriteHeader(injected.status)
+	if !sleep(r, latency) || f.injected(w, r) {
 		return
 	}
 	if !f.validToken(r.Header.Get("Authorization")) {

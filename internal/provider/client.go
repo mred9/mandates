@@ -149,7 +149,11 @@ func (c *Client) authenticate(ctx context.Context) (Token, error) {
 	if err != nil {
 		return Token{}, err
 	}
-	if err := classify("auth", status, h); err != nil {
+	switch err := classify("auth", status, h); {
+	case errors.Is(err, ErrNotFound), errors.Is(err, ErrInvalidRequest):
+		// Not the lookup's fault: don't let the caller read it as "no match" or "bad input".
+		return Token{}, fmt.Errorf("%w: auth: status %d", ErrUnavailable, status)
+	case err != nil:
 		return Token{}, err
 	}
 	var r struct {
