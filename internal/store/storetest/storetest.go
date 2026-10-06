@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,8 +84,10 @@ func profileRoundTrip(t *testing.T, h Harness) {
 
 func profileNotFoundAndConflict(t *testing.T, h Harness) {
 	ctx := context.Background()
-	if _, err := h.Profiles.Get(ctx, uuid.NewString()); !errors.Is(err, profile.ErrNotFound) {
-		t.Fatalf("get unknown: got %v, want ErrNotFound", err)
+	for _, id := range []string{uuid.NewString(), "not-a-uuid"} {
+		if _, err := h.Profiles.Get(ctx, id); !errors.Is(err, profile.ErrNotFound) {
+			t.Fatalf("get %q: got %v, want ErrNotFound", id, err)
+		}
 	}
 	s := mustCreateProfile(t, h)
 	if err := h.Profiles.Create(ctx, s); !errors.Is(err, profile.ErrConflict) {
@@ -172,7 +175,7 @@ func databaseRejectsMismatch(t *testing.T, h Harness) {
 	err := h.Exec(context.Background(), fmt.Sprintf(
 		`INSERT INTO user_credentials (id, user_id, username, method, created_at)
 		 VALUES ('%s', '%s', 'no-hash', 'password', '2026-01-01T00:00:00Z')`, uuid.NewString(), user.ID))
-	if err == nil {
-		t.Fatal("password credential without a hash was accepted")
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "check") {
+		t.Fatalf("password credential without a hash: got %v, want a CHECK constraint violation", err)
 	}
 }
