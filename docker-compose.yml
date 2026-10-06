@@ -1,0 +1,16 @@
+# Databases for the Postgres/CockroachDB contract tests:
+#   docker compose up -d
+#   TEST_POSTGRES_DSN=postgres://postgres:postgres@localhost:5432/mandates?sslmode=disable \
+#   TEST_COCKROACH_DSN=postgres://root@localhost:26257/defaultdb?sslmode=disable \
+#   go test -race ./...
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mandates
+    ports: ["5432:5432"]
+  cockroach:
+    image: cockroachdb/cockroach:latest
+    command: start-single-node --insecure
+    ports: ["26257:26257"]

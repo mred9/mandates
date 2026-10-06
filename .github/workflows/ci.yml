@@ -1,0 +1,32 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # ready_for_review: draft PRs skip CI and run it once when marked ready.
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions: { contents: read }
+jobs:
+  test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: mandates }
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 2s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      # Service containers can't take a command, and CockroachDB needs one.
+      - name: Start CockroachDB
+        run: |
+          docker run -d --name cockroach -p 26257:26257 cockroachdb/cockroach:latest start-single-node --insecure
+          for i in $(seq 1 30); do docker exec cockroach ./cockroach sql --insecure -e 'select 1' && exit 0; sleep 2; done; exit 1
+      - run: go vet ./...
+      - run: go test -race -count=1 ./...
+        env:
+          TEST_POSTGRES_DSN: postgres://postgres:postgres@localhost:5432/mandates?sslmode=disable
+          TEST_COCKROACH_DSN: postgres://root@localhost:26257/defaultdb?sslmode=disable
