@@ -192,3 +192,15 @@ and what a reviewer should double-check. Edit freely.
 
 **Reviewer should double-check**
 - The workflow principles are a one-line summary of the dgv-session skill; trivial changes skip the issue and approval stop, which the README's "non-trivial" covers.
+
+---
+
+## Follow-up: AGENTS.md (issue #26, branch `26-agents-md`)
+
+**Produced**
+- `AGENTS.md`, for agents in any harness: commands, the rules the code depends on, the workflow, gotchas from this project, and where the open work is. It points to SPEC, DESIGN, AI_LOG and README rather than repeating them.
+- No `CLAUDE.md`: the Claude Code docs (memory, "AGENTS.md" section) say that since v2.1.277 it reads `AGENTS.md` when there is no `CLAUDE.md` or `CLAUDE.local.md` in the working directory or above it, and only `CLAUDE.md` when there is one.
+
+**Reviewer should double-check**
+- All commands were run as written, including the Docker Compose form from a cold start (databases ready in ~4s; Postgres and CockroachDB contract tests ran, none skipped).
+- Review fixes: wait for the databases before testing, `-count=1`, how the DB tests skip (no `SKIP` without `-v`), `CLAUDE.local.md` named too, the error-text rule narrowed to errors that reach a log or client, an empty dev server.
