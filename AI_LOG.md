@@ -72,3 +72,25 @@ and what a reviewer should double-check. Edit freely.
   - Retry no longer sleeps after its last attempt; DESIGN now says retries cover writes only.
 - Deferred to #2: pin the CI actions and the CockroachDB image; SPEC §2 drift.
 - Dropped: `Validate` treating `[]byte{}` as unset (no caller produces it).
+
+---
+
+## Step Q2: REST API (issue #4, branch `4-q2-api`)
+
+**Produced**
+- `internal/api`: `GET /v1/profiles/{id}`, `POST /v1/profiles/search`, `/healthz`; middleware (request ID, body cap, recover, access log, bearer auth with scopes, per-client token bucket); one error mapping with a fixed-message envelope; `Auditor` with fail-closed handlers; redacting JSON logger; in-memory dev token issuer.
+- `cmd/server`: flags, keys from env (ephemeral in `-dev`), SQLite or PostgreSQL/CockroachDB, server timeouts, graceful shutdown.
+- Carry-overs: CodeQL alert #1 (`crypto.Seal` capacity hint removed); `profile.Address` redacts itself in logs; SPEC §2 rewritten to match (#2 item 3).
+- TDD: `api_test.go` written against a compile-only skeleton and seen failing (10 tests) before the code. Teeth checks: removing the body cap, the redaction, the scope check, the expiry check, the request-ID validation, the audit fail-closed, or logging the raw path each broke a test.
+- Smoke run: seeded a SQLite file, started `cmd/server -dev`, curled get, search and an unauthenticated get, sent SIGTERM; logs held no PII.
+
+**Assumptions**
+- At the user's direction: no `/oauth2/token` endpoint (`-dev` prints a token instead); no idle-bucket eviction (buckets keyed by authenticated client ID); CI and image pinning stay in #2.
+- The server refuses to start without `-dev`, because the token verifier and Vault envelope are stubs.
+- An oversized body returns 400 `invalid_request` rather than 413, to keep one code for bad input.
+- Unauthenticated requests are not rate-limited (the limiter runs after auth, as SPEC orders it).
+
+**Reviewer should double-check**
+- `ServeMux` sets `r.Pattern` on the request the access-log middleware holds; the route field depends on that (tested).
+- `limiter.wait` cancels a reservation it won't use, so a rejected request doesn't consume a token.
+- The redaction deny-list matches keys, not values: a PII value under an innocent key (`"q"`) would be logged. The LogValuers and the access log's no-body rule are the main defence.
