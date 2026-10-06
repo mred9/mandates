@@ -38,16 +38,18 @@ KEK that lives in the key service. Only the wrapped DEK is stored. Consequences:
 - Rotating the KEK means re-wrapping 32-byte DEKs, not re-encrypting every field.
 - With Vault transit, the KEK never leaves Vault, so a copy of the database (or a backup) can't
   be decrypted without Vault access, which is separately audited. A memory dump of the app is a
-  different matter: it holds the blind-index key (see below) and the app's Vault credential.
+  different matter: its Vault credential still allows unwrap calls (audited, and revocable), and
+  today it also holds the blind-index key (see below for moving that into Vault).
 - Not crypto-shredding: the wrapped DEK sits in the same row as the ciphertext, so deleting it
   erases no more than deleting the row, and backups keep both. Erasure that reaches backups needs
-  the destroyed key held outside the database, e.g. a per-subject key in Vault.
-
-**The address is one sealed field, not five columns.** Encrypted columns can't be queried anyway,
-so splitting them would only add ciphertexts and AAD labels; the address is sealed as one JSON value.
+  the destroyed key held outside the database, e.g. a per-subject key in Vault, and takes effect
+  once Vault's own backups holding that key have aged out.
 
 `LocalKeyEnvelope` (KEK in process memory) exists for dev and tests. `VaultTransitEnvelope` is a
 stub showing where the real one plugs in.
+
+**The address is one sealed field, not five columns.** Encrypted columns can't be queried anyway,
+so splitting them would only add ciphertexts and AAD labels; the address is sealed as one JSON value.
 
 **AAD binds each ciphertext to its row and column.** Fields are sealed with AES-256-GCM and
 additional data `"<id>|<column>"`. Someone with write access to the database can't copy Alice's
@@ -68,9 +70,11 @@ equal indexes, so search is an indexed equality lookup.
 - The index column isn't authenticated, so `Search` checks each decrypted phone against the query.
   Pointing a row's index at someone else's number returns an error, not their PII.
 - No index on name. Names don't normalise reliably (case, accents, order, nicknames), so an exact
-  name index would miss real matches, and equal names leak more about people than equal numbers.
+  name index would miss real matches. It would also leak more: common names stand out by how often
+  they repeat, while phone numbers are mostly unique.
 - In production the HMAC would be computed by Vault (transit `hmac`), so the index key never sits
-  in the app's memory either.
+  in the app's memory. That key must not be rotated without reindexing every row, since a new key
+  version changes every index value.
 
 **Credentials: the method is a type, and the schema enforces it.** `Method` is `password`,
 `passkey` or `totp`. Each method stores only what it needs:
@@ -102,7 +106,7 @@ where it can. Wrapping reads too is a one-line change per query if contention sh
 trivial, and it runs under `-race`. Foreign keys are on, WAL is on, and `busy_timeout` is set.
 
 **One contract suite.** `storetest.Run` is the specification of a store. SQLite, PostgreSQL and
-CockroachDB all run the same six tests, and CI runs all three on every PR. A new dialect is
+CockroachDB all run the same six tests, and CI runs all three on every PR that isn't a draft. A new dialect is
 done when it passes the suite.
 
 **Malformed ID means not found.** `Get("not-a-uuid")` returns `ErrNotFound`, not a database error.

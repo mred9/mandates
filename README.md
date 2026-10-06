@@ -49,8 +49,9 @@ TEST_COCKROACH_DSN='postgres://root@localhost:26257/defaultdb?sslmode=disable' \
 go test -race -count=1 ./...        # the same contract suite on all three databases
 ```
 
-CI (`.github/workflows/ci.yml`) runs the second form on pushes to main and on PRs once they are
-marked ready (drafts skip it).
+CI (`.github/workflows/ci.yml`) runs the second form on pushes to main and on every PR that isn't
+a draft. Locally, wait a few seconds after `docker compose up -d` for both databases to accept
+connections.
 
 ## Status
 

@@ -27,7 +27,7 @@ and what a reviewer should double-check. Edit freely.
 - The Docker daemon isn't running here, so Postgres/CockroachDB contract tests will be reported as skipped unless DSNs are supplied. (Superseded: CI runs them on every ready PR, and they were run locally with Docker Compose for #26.)
 
 **Reviewer should double-check**
-- Whether the name-matching rule (exact, post-decrypt) is acceptable or whether a name blind index is wanted.
+- Whether the name-matching rule (exact, post-decrypt) is acceptable or whether a name blind index is wanted. (Settled: the name filter was cut in Q1; DESIGN Q1 says why there is no name index.)
 - Whether the API returning 404 for malformed IDs (instead of 400) is the trade-off you want.
 - Default argon2id parameters (64 MiB / t=3 / p=4) against your target hardware.
 - Commit granularity: one commit per step as requested. Red/Green cycles are not separate commits.
