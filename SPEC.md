@@ -33,7 +33,7 @@ internal/credential/        Credential model, Store interface, argon2id hasher
 internal/store/postgres/    pgx implementation of both stores (PostgreSQL + CockroachDB), migrations
 internal/store/sqlite/      modernc.org/sqlite implementation of both stores, migrations
 internal/store/storetest/   the shared contract suite, run by every implementation
-internal/api/               HTTP server, middleware, handlers, error mapping, token verifier stub
+internal/api/               HTTP handler, middleware, error mapping, audit, redacting logger, dev token issuer
 internal/provider/          IdentityProvider, Identity model, token cache, retry, breaker, secrets
 internal/provider/abc/      ABC adapter + httptest fake
 internal/provider/xyz/      XYZ adapter + httptest fake
@@ -160,11 +160,11 @@ Sentinels: `ErrInvalid`, `ErrConflict`. `Credential` implements `slog.LogValuer`
 | Method | Path | Scope | Notes |
 |---|---|---|---|
 | `GET`  | `/v1/profiles/{id}` | `profiles:read` | 200 profile, or uniform 404 |
-| `POST` | `/v1/profiles/search` | `profiles:read` | PII in body only; 200 with possibly empty `items` |
-| `POST` | `/oauth2/token` | none | **dev stub only** (`-dev` flag): client credentials grant, HTTP Basic client auth |
+| `POST` | `/v1/profiles/search` | `profiles:read` | phone in the body only; 200 with possibly empty `items` |
 | `GET`  | `/healthz` | none | liveness |
 
-Routing uses `net/http.ServeMux` method-and-path patterns. No chi.
+Routing uses `net/http.ServeMux` method-and-path patterns. Any other path returns the 404 envelope.
+Every response sets `Cache-Control: no-store`.
 
 **Profile response**
 
@@ -172,93 +172,98 @@ Routing uses `net/http.ServeMux` method-and-path patterns. No chi.
 {
   "id": "0192...", "name": "Ada Lovelace", "phone": "+15551234567",
   "address": {"street_address": "...", "locality": "...", "region": "...", "postal_code": "...", "country": "GB"},
-  "created_at": "2026-10-06T00:00:00Z", "updated_at": "2026-10-06T00:00:00Z"
+  "created_at": "2026-10-06T00:00:00Z"
 }
 ```
 
 **Search request / response**
 
 ```json
-{"phone": "+15551234567", "name": "Ada Lovelace", "page_size": 20, "page_token": ""}
+{"phone": "+15551234567", "page_size": 20, "page_token": ""}
 {"items": [ /* profiles */ ], "next_page_token": "..."}
 ```
 
-`page_token` is an opaque base64url keyset cursor (last returned ID). It contains no PII.
+`page_size` omitted or 0 means 20; otherwise it must be 1..100. Unknown fields and trailing data are rejected.
+`page_token` is base64url of the last returned ID (a UUID, no PII); it is present when the page
+was full.
 
-**Error envelope** (every non-2xx)
+**Error envelope** (every 4xx and 5xx; messages are fixed per code)
 
 ```json
 {"error": {"code": "not_found", "message": "resource not found", "request_id": "..."}}
 ```
 
-| Sentinel | Status | code |
+| Error | Status | code |
 |---|---|---|
-| `profile.ErrNotFound`, malformed ID | 404 | `not_found` |
-| `profile.ErrInvalid`, bad JSON, unknown fields | 400 | `invalid_request` |
+| `profile.ErrNotFound` (unknown or malformed ID), unknown route | 404 | `not_found` |
+| `profile.ErrInvalid`, `api.ErrInvalidRequest` (bad JSON, unknown fields, body over 16 KiB, bad `page_token`) | 400 | `invalid_request` |
 | `api.ErrUnauthenticated` | 401 + `WWW-Authenticate: Bearer` | `unauthenticated` |
 | `api.ErrForbidden` (missing scope) | 403 | `insufficient_scope` |
 | `api.ErrRateLimited` | 429 + `Retry-After` | `rate_limited` |
-| anything else | 500 | `internal` (details logged, not returned) |
+| anything else, including a panic | 500 | `internal` (details logged, not returned) |
 
-Malformed and non-existent IDs return byte-identical 404 bodies (apart from `request_id`).
+Malformed and non-existent IDs return byte-identical 404 bodies (apart from `request_id`):
+`profile.Repository.Get` returns `ErrNotFound` for anything that isn't a canonical lowercase UUID
+without calling the store; `page_token` must decode to one too.
+`internal/api/errors.go` is the only place errors become statuses.
 
 ### 2.2 Auth
 
 ```go
-type Principal struct {
-    ClientID string
-    Scopes   []string
-}
+type Principal struct{ ClientID string; Scopes []string }
 type TokenVerifier interface {
     Verify(ctx context.Context, bearer string) (Principal, error) // ErrUnauthenticated on any failure
 }
+func NewDevTokens() *DevTokens
+func (d *DevTokens) Mint(clientID string, scopes []string, ttl time.Duration) (string, error)
 ```
 
-Dev implementation: an in-memory issuer that mints random opaque tokens (32 bytes, base64url)
-with scopes and expiry, and verifies them with constant-time lookup. `TODO:` production verifies
-JWTs from the real authorization server (JWKS, `iss`, `aud`, `exp`, `scope`) or uses RFC 7662
-introspection.
+`DevTokens` mints random opaque tokens (32 bytes, base64url) and stores them by SHA-256 with
+scopes and expiry. There is no token endpoint: `cmd/server -dev` mints one `profiles:read` token
+at startup and prints it to stderr. `TODO:` production verifies JWTs from the real authorization
+server (JWKS, `iss`, `aud`, `exp`, `scope`) or uses RFC 7662 introspection.
 
 ### 2.3 Middleware chain (outer → inner)
 
-1. **Request ID**: accept `X-Request-ID` if it is ≤64 chars of `[A-Za-z0-9-_]`, else generate; echo it; put it in context.
+1. **Request ID**: accept `X-Request-ID` if it matches `[A-Za-z0-9_-]{1,64}`, else generate; echo it; put it in context. Also caps the body at 16 KiB (`http.MaxBytesReader`).
 2. **Recover**: panic → 500 with the error envelope.
-3. **Access log**: slog, method, route pattern (not raw path), status, duration, request ID, client ID. No bodies, no query strings.
-4. **Auth**: bearer → `Principal` in context; per-route scope check.
-5. **Rate limit**: token bucket per `ClientID` (`golang.org/x/time/rate`), idle buckets evicted.
-6. **Handler.** Writes an audit event for every PII read before writing the response.
+3. **Access log**: method, route pattern (not raw path), status, duration, request ID, client ID. No bodies, no query strings.
+4. **Auth** (per route): bearer → `Principal`; scope check.
+5. **Rate limit** (per route): token bucket per `ClientID` (`golang.org/x/time/rate`). Keys are authenticated client IDs, so buckets are not evicted.
+6. **Handler.** Records an audit event for every PII read before writing the response.
 
 ### 2.4 Audit
 
 ```go
 type AuditEvent struct {
-    Time      time.Time
-    RequestID string
-    ClientID  string
-    Action    string   // "profile.get", "profile.search"
+    Time       time.Time
+    RequestID  string
+    ClientID   string
+    Action     string   // "profile.get", "profile.search"
     SubjectIDs []string // profile IDs returned; never PII
-    Outcome   string   // "returned", "not_found", "empty"
+    Outcome    string   // "returned", "not_found", "empty"
 }
 type Auditor interface { Record(ctx context.Context, e AuditEvent) error }
 ```
 
-Slog implementation writes to a dedicated logger. If `Record` fails the handler returns 500 and
-no PII (fail closed).
+`SlogAuditor` writes to a dedicated logger (`log=audit`). If `Record` fails the handler returns
+500 and no PII (fail closed).
 
 ### 2.5 Logging and redaction
 
-- `slog.JSONHandler` wrapped with `ReplaceAttr` that redacts a deny-list of keys
-  (`name`, `phone`, `address`, `password`, `token`, `authorization`, `secret`, …) at any depth.
-- `profile.Profile` and `profile.Address` implement `slog.LogValuer` and render as `[REDACTED]`
-  apart from `id`.
-- Test: a request whose body contains a known phone number produces log output that does not
-  contain it.
+- `api.NewLogger`: `slog.JSONHandler` with a `ReplaceAttr` that redacts a deny-list of keys
+  (`name`, `phone`, `address`, `password`, `token`, `authorization`, `secret`, …), matching an attribute's
+  own key or any enclosing group's key. It matches keys, not values.
+- `profile.Profile` and `profile.Address` implement `slog.LogValuer` (a profile logs only its ID).
+- Tested: requests carrying a known phone number produce logs that contain neither it nor the name.
 
 ### 2.6 Server
 
-`cmd/server` flags: `-addr`, `-db` (`sqlite|postgres`), `-dsn`, `-dev`, `-rate`, `-burst`.
-Server sets `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, `IdleTimeout`, a request body limit
-(`http.MaxBytesReader`, 16 KiB), and shuts down gracefully on SIGINT/SIGTERM.
+`cmd/server` flags: `-addr`, `-db` (`sqlite|postgres`), `-dsn`, `-dev`, `-rate`, `-burst`. Keys come
+from `MANDATES_KEK` and `MANDATES_INDEX_KEY` (base64, 32 bytes); with `-dev`, missing ones are
+generated for the run. Only `-dev` starts, since the production verifier and envelope are stubs.
+The server opens only the profile store and sets `ReadHeaderTimeout`, `ReadTimeout`,
+`WriteTimeout`, `IdleTimeout`, and shuts down gracefully on SIGINT/SIGTERM.
 
 ---
 

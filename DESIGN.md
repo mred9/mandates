@@ -126,7 +126,91 @@ Q2 relies on this to return one uniform 404 regardless of why the profile wasn't
 
 ## Q2: REST API
 
-*To be written in step Q2.*
+### Shape
+
+```
+request ─▶ request ID ─▶ recover ─▶ access log ─▶ ServeMux ─▶ auth + scope ─▶ rate limit ─▶ handler ─▶ audit ─▶ response
+           (+16 KiB cap)                                       (per route)                    │
+                                                                                profile.Repository (Q1)
+```
+
+### Decisions
+
+**Two read endpoints, nothing else.** `GET /v1/profiles/{id}` and `POST /v1/profiles/search`.
+The brief asks to search and retrieve; writes stay in the DAO. The server opens only the profile
+store, so in production the API can connect under a role that can't read `user_credentials` (Q1's
+two-store split pays off here). That needs migrations run as a separate step: today `Open` migrates on
+start, which needs DDL rights on both tables.
+
+**Search is a POST.** A phone number in a query string ends up in access logs, proxy logs, browser
+history and `Referer` headers. In a body it ends up nowhere we don't control. The cost is that the
+request isn't cacheable, which PII responses shouldn't be anyway (`Cache-Control: no-store` on every
+response).
+
+**One 404 for "doesn't exist" and "malformed".** Distinct answers would let a caller probe which IDs
+exist and learn the ID format. `Repository.Get` returns `ErrNotFound` for anything that isn't a canonical
+lowercase UUID before touching the store (PostgreSQL would otherwise reject `%FF` as invalid UTF-8 with an error, a
+500), so the handler has one path; a test compares the bodies byte for byte.
+
+**OAuth2 bearer tokens with scopes, behind an interface.** Callers are services, so this is the
+client-credentials model: the API checks a token and a scope (`profiles:read`) per route. The
+`TokenVerifier` interface is the seam. The dev issuer mints opaque random tokens and keeps only their
+SHA-256 hash, so lookups don't compare secrets byte by byte and a memory dump holds no usable tokens.
+I didn't build a token endpoint: an unauthenticated endpoint that hands out credentials is attack
+surface, even in dev. `-dev` prints one token at startup instead. Production would verify JWTs from
+the organisation's authorization server or use introspection; the server refuses to start without
+`-dev` until that exists.
+
+**Rate limit per client, after auth.** A token bucket keyed by the authenticated client ID. That
+means one noisy client can't starve the others, and the bucket map is bounded by the number of
+registered clients, so there's nothing to evict. The gap: unauthenticated requests aren't limited.
+Token checks are cheap, but in production an edge limiter (per IP, at the load balancer or gateway)
+covers that layer.
+
+**Audit every PII read, fail closed.** Each get and search records who (client, request ID), what
+(action, profile IDs returned) and the outcome, never the PII itself. If the audit write fails the
+request fails with 500 before any PII is written: an unaudited read is worse than an unavailable one
+for this data. The `SlogAuditor` is a stand-in; real audit goes to an append-only store separate
+from application logs.
+
+**PII can't reach the logs, by three independent layers.**
+- The access log records the route pattern (`GET /v1/profiles/{id}`), never the raw path, query or body.
+- `Profile` and `Address` are `slog.LogValuer`s that render as `[REDACTED]`.
+- The logger's `ReplaceAttr` redacts a deny-list of keys at any depth, as a backstop for a careless
+  `log.Info("x", "phone", p)`.
+
+A test sends a known phone number and asserts it appears nowhere in the log output. One path the
+layers don't cover: a 500 logs its error text, so errors must not carry PII. The stores' and the
+repository's errors don't; that is a convention to keep, not something the logger enforces.
+
+**Errors map in one place, with fixed messages.** `errors.go` turns sentinels into statuses. The
+client gets a code, a fixed message and the request ID, never the error text, which could carry
+input or internals. 500s are logged in full with the request ID, so support can correlate.
+
+**Input is bounded and strict.** 16 KiB body cap, unknown fields and trailing data rejected,
+`page_size` 1..100, phone validated as E.164. Caller-supplied request IDs are accepted only if they
+are short and `[A-Za-z0-9_-]`, so they can't inject into logs.
+
+**Server hygiene.** Header, read, write and idle timeouts (slowloris), graceful shutdown on
+SIGTERM so in-flight reads finish during a deploy.
+
+### Trade-offs I accepted
+
+- **Page tokens are the last ID, base64url-encoded, not encrypted or signed.** They contain no PII,
+  and tampering with one only moves the cursor within the caller's own query. Signing them would
+  stop clients from building cursors, which doesn't matter here.
+- **A full page always returns a `next_page_token`**, so a result that's an exact multiple of the
+  page size costs one extra empty request. Fetching `page_size+1` avoids it; not worth the code here.
+- **Not-found audits don't record the requested ID.** Recording it would help spot enumeration.
+  It's an easy change; I kept `SubjectIDs` meaning "profiles disclosed".
+
+### With more time
+
+- JWT verification against the real authorization server, and mTLS between services.
+- An edge rate limiter per IP, and per-client quotas from configuration.
+- Audit to an append-only, tamper-evident store, plus alerting on unusual read volumes per client.
+- OpenAPI spec, metrics and tracing (request ID → trace ID).
+- Attribute-based access: restrict which clients may read which tenants' profiles once there are tenants.
 
 ## Q3: Identity provider connector
 

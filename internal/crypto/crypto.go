@@ -73,7 +73,7 @@ func Seal(key, plaintext, aad []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	nonce := make([]byte, gcm.NonceSize(), gcm.NonceSize()+len(plaintext)+gcm.Overhead())
+	nonce := make([]byte, gcm.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, fmt.Errorf("crypto: nonce: %w", err)
 	}

@@ -72,3 +72,43 @@ and what a reviewer should double-check. Edit freely.
   - Retry no longer sleeps after its last attempt; DESIGN now says retries cover writes only.
 - Deferred to #2: pin the CI actions and the CockroachDB image; SPEC §2 drift.
 - Dropped: `Validate` treating `[]byte{}` as unset (no caller produces it).
+
+---
+
+## Step Q2: REST API (issue #4, branch `4-q2-api`)
+
+**Produced**
+- `internal/api`: `GET /v1/profiles/{id}`, `POST /v1/profiles/search`, `/healthz`; middleware (request ID, body cap, recover, access log, bearer auth with scopes, per-client token bucket); one error mapping with a fixed-message envelope; `Auditor` with fail-closed handlers; redacting JSON logger; in-memory dev token issuer.
+- `cmd/server`: flags, keys from env (ephemeral in `-dev`), SQLite or PostgreSQL/CockroachDB, server timeouts, graceful shutdown.
+- Carry-overs: CodeQL alert #1 (`crypto.Seal` capacity hint removed); `profile.Address` redacts itself in logs; SPEC §2 rewritten to match (#2 item 3).
+- TDD: `api_test.go` written against a compile-only skeleton and seen failing (10 tests) before the code. Teeth checks: removing the body cap, the redaction, the scope check, the expiry check, the request-ID validation, the audit fail-closed, or logging the raw path each broke a test.
+- Smoke run: seeded a SQLite file, started `cmd/server -dev`, curled get, search and an unauthenticated get, sent SIGTERM; logs held no PII.
+
+**Assumptions**
+- At the user's direction: no `/oauth2/token` endpoint (`-dev` prints a token instead); no idle-bucket eviction (buckets keyed by authenticated client ID); CI and image pinning stay in #2.
+- The server refuses to start without `-dev`, because the token verifier and Vault envelope are stubs.
+- An oversized body returns 400 `invalid_request` rather than 413, to keep one code for bad input.
+- Unauthenticated requests are not rate-limited (the limiter runs after auth, as SPEC orders it).
+
+**Reviewer should double-check**
+- `ServeMux` sets `r.Pattern` on the request the access-log middleware holds; the route field depends on that (tested).
+- `limiter.wait` cancels a reservation it won't use, so a rejected request doesn't consume a token.
+- The redaction deny-list matches keys, not values: a PII value under an innocent key (`"q"`) would be logged. The LogValuers and the access log's no-body rule are the main defence.
+
+**Pre-PR review (independent reviewer + security review)**
+- Security review: no findings.
+- Fixed:
+  - On PostgreSQL, `GET /v1/profiles/%FF` (or `%00`) returned 500, not the uniform 404: Postgres rejects invalid UTF-8 (SQLSTATE 22021) before the UUID cast. Reproduced against compose Postgres; `Repository.Get` now returns `ErrNotFound` for any non-UUID without calling the store. The test was seen failing first.
+  - The log redaction missed grouped attributes (`slog.Group("address", ...)`, `WithGroup("phone")`): slog calls `ReplaceAttr` on group members, not the group. It now checks enclosing group keys too, and lists the remaining address subfields.
+  - `Cache-Control: no-store` is now set in middleware, so it covers every response as SPEC says.
+  - Docs: `page_size` 0 means the default; the envelope covers 4xx/5xx; the credentials-role claim notes that migrations need a separate step; a 500's error text is logged; README explains the keys.
+  - The internal-error test no longer uses a password-shaped marker.
+- Verified `cmd/server -db postgres` against compose Postgres (start, get, search, SIGTERM).
+- Deferred to #5: access log on panic, `-rate` validation, second-signal exit, per-request timeout, server-side audit request ID, `SlogAuditor` test, 403 `WWW-Authenticate`.
+
+**Copilot round 1**
+- Fixed: `SlogAuditor.Record` always returned nil (`Logger.Info` drops write errors), so the production auditor could not fail closed. It now writes through the handler and returns its error; a test with a failing writer was seen failing first.
+- Fixed: the page-token test checked for `555`, which a UUIDv7 can contain; it now checks the token is exactly the last returned ID.
+
+**Copilot round 2**
+- Fixed: `uuid.Parse` skips the outer bytes of a 38-byte (braced) input without checking them, so `{<uuid>\x00` passed the malformed-ID check and reached PostgreSQL (500). `Get` and the search cursor now accept only the canonical lowercase form, which also gives SQLite and PostgreSQL the same answer for uppercase IDs. Tests failed first; verified on compose Postgres.

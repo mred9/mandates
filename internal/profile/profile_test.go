@@ -198,7 +198,7 @@ func TestProfileLogsWithoutPII(t *testing.T) {
 	var buf bytes.Buffer
 	p := ada
 	p.ID = "0192-test"
-	slog.New(slog.NewJSONHandler(&buf, nil)).Info("loaded", "profile", p)
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("loaded", "profile", p, "address", p.Address)
 	out := buf.String()
 	if !strings.Contains(out, "0192-test") {
 		t.Fatalf("ID should be logged: %s", out)
@@ -206,6 +206,23 @@ func TestProfileLogsWithoutPII(t *testing.T) {
 	for _, pii := range []string{"Ada", "555", "London"} {
 		if strings.Contains(out, pii) {
 			t.Errorf("log contains %q: %s", pii, out)
+		}
+	}
+}
+
+// strictStore fails any Get it receives, like a database rejecting bytes it can't parse.
+type strictStore struct{ memStore }
+
+func (*strictStore) Get(context.Context, string) (Sealed, error) {
+	return Sealed{}, errors.New("store rejected the id")
+}
+
+func TestGetMalformedIDIsNotFoundWithoutTheStore(t *testing.T) {
+	repo, _ := newRepo(t)
+	repo.store = &strictStore{}
+	for _, id := range []string{"not-a-uuid", "\xff", "a\x00b", "", "{0192f2c4-0000-7000-8000-000000000000\x00", "{0192f2c4-0000-7000-8000-000000000000\xff"} {
+		if _, err := repo.Get(context.Background(), id); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Get(%q) = %v, want ErrNotFound", id, err)
 		}
 	}
 }

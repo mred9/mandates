@@ -29,12 +29,27 @@ CI (`.github/workflows/ci.yml`) runs the second form on every PR.
 | Part | Implemented | Stubbed / not done |
 |---|---|---|
 | Q1 DAO | profile repository with per-row envelope encryption and phone blind index; argon2id passwords; credential model for password, passkey and TOTP; SQLite and pgx (PostgreSQL + CockroachDB) stores; CockroachDB retry; one contract suite on all three | Vault transit envelope (`TODO` stub); profile update/delete; key rotation; versioned migration runner |
-| Q2 API | not started | |
+| Q2 API | profile get and search; scoped bearer auth; per-client rate limit; audit (fail closed); PII-free logs; server with timeouts and graceful shutdown | real token verifier (JWT/introspection); production keys via Vault; edge rate limiting |
 | Q3 Connector | not started | |
+
+## Run the server
+
+```sh
+export MANDATES_KEK=$(head -c32 /dev/urandom | base64) MANDATES_INDEX_KEY=$(head -c32 /dev/urandom | base64)
+go run ./cmd/server -dev            # SQLite at ./mandates.db; prints a profiles:read token
+curl -H "Authorization: Bearer $TOKEN" localhost:8080/v1/profiles/<id>
+curl -H "Authorization: Bearer $TOKEN" -d '{"phone":"+15551234567"}' localhost:8080/v1/profiles/search
+```
+
+Without the two keys, `-dev` generates ephemeral ones, so data from an earlier run can't be read.
+The API has no write endpoints: profiles are created through the DAO (`profile.Repository.Create`)
+with the same keys.
 
 ## Layout
 
 ```
+cmd/server/                API server: flags, keys, timeouts, graceful shutdown
+internal/api/              handlers, middleware, auth, rate limit, audit, error mapping, redacting logger
 internal/crypto/           envelope encryption, AES-GCM field sealing, HMAC blind index
 internal/profile/          Profile model, Store interface, Repository (the DAO)
 internal/credential/       Credential model, Store interface, argon2id hasher
