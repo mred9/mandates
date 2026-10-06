@@ -34,13 +34,14 @@ internal/store/postgres/    pgx implementation of both stores (PostgreSQL + Cock
 internal/store/sqlite/      modernc.org/sqlite implementation of both stores, migrations
 internal/store/storetest/   the shared contract suite, run by every implementation
 internal/api/               HTTP handler, middleware, error mapping, audit, redacting logger, dev token issuer
-internal/provider/          IdentityProvider, Identity model, token cache, retry, breaker, secrets
-internal/provider/abc/      ABC adapter + httptest fake
-internal/provider/xyz/      XYZ adapter + httptest fake
+internal/provider/          IdentityProvider, Identity model, Client, token cache, retry, breaker, secrets
+internal/provider/providertest/  the shared httptest vendor fake
+internal/provider/abc/      ABC adapter + its fake
+internal/provider/xyz/      XYZ adapter + its fake
 ```
 
-`storetest` is the one addition to the requested layout: the contract suite has to live in an
-importable non-`_test` package so both store packages can call it.
+`storetest` and `providertest` are the additions to the requested layout: shared test code has to
+live in an importable non-`_test` package so several packages can use it.
 
 ---
 
@@ -276,57 +277,83 @@ type Address struct{ StreetAddress, Locality, Region, PostalCode, Country string
 type Identity struct {
     Provider string
     Name     string
-    Phone    string
+    Phone    string // E.164
     Address  Address
-}
-type LookupRequest struct{ Phone, Name string }
+} // implements slog.LogValuer: logs only the provider
+type LookupRequest struct{ Phone, Name string } // redacts itself in logs
 
 type IdentityProvider interface {
     Name() string
     Lookup(ctx context.Context, req LookupRequest) (Identity, error)
 }
 
-type Credentials struct{ Username, Password string }
+type Credentials struct{ Username, Password string } // redacts itself in logs
 type Secrets interface {
     VendorCredentials(ctx context.Context, vendor string) (Credentials, error)
 }
-// StaticSecrets (dev/tests) and VaultSecrets (TODO stub: reads kv-v2 secret/data/idp/<vendor>).
+// StaticSecrets (map, dev/tests) and VaultSecrets (TODO stub: kv-v2 secret/data/idp/<vendor>).
 
-type Token struct{ AccessToken string; ExpiresAt time.Time }
+type Token struct{ AccessToken string; ExpiresAt time.Time } // redacts itself in logs
 type TokenFetcher func(ctx context.Context) (Token, error)
 
-// TokenCache returns a cached token, refreshing it when it is within RefreshBefore of
-// expiry. Concurrent callers share one in-flight refresh (singleflight).
-type TokenCache struct{ /* fetcher, clock, refreshBefore */ }
+// Refreshes when within refreshBefore of expiry; concurrent callers share one fetch (singleflight).
+func NewTokenCache(fetch TokenFetcher, refreshBefore time.Duration, now func() time.Time) *TokenCache
 func (c *TokenCache) Token(ctx context.Context) (string, error)
-func (c *TokenCache) Invalidate()
+func (c *TokenCache) Invalidate(stale string) // only if stale is still the cached token
 
-type Breaker struct{ /* closed → open after N consecutive failures → half-open after cooldown */ }
+// closed → open after threshold consecutive failures → one half-open probe after cooldown.
+func NewBreaker(threshold int, cooldown time.Duration, now func() time.Time) *Breaker
 func (b *Breaker) Allow() error   // ErrCircuitOpen
-func (b *Breaker) Record(err error)
+func (b *Breaker) Record(err error) // ErrUnavailable is a failure; the caller's context error is neither
 
 type VendorConfig struct {
-    BaseURL          string
-    Timeout          time.Duration // per HTTP attempt
-    MaxAttempts      int
-    BackoffBase      time.Duration
-    BackoffMax       time.Duration
-    BreakerThreshold int
-    BreakerCooldown  time.Duration
-    RefreshBefore    time.Duration
-    SecretName       string
+    BaseURL          string        // https, or http to a loopback host (tests)
+    Timeout          time.Duration // per attempt, covering its /auth, /identity and any re-auth; 5s
+    MaxAttempts      int           // 3
+    BackoffBase      time.Duration // 100ms, full jitter
+    BackoffMax       time.Duration // 2s; also caps Retry-After
+    BreakerThreshold int           // 5
+    BreakerCooldown  time.Duration // 30s
+    RefreshBefore    time.Duration // 30s
+    DefaultTokenTTL  time.Duration // 5m, when /auth omits expires_in
+    SecretName       string        // the vendor name
+    Now              func() time.Time
 }
 
-// Do runs one vendor call with timeout, retry on transient failures only, and breaker.
+// Do runs one call through the breaker with a timeout per attempt and retries on transient failures.
 func Do(ctx context.Context, cfg VendorConfig, b *Breaker, call func(ctx context.Context) error) error
+
+// Client is the IdentityProvider. A vendor package supplies only enc and dec.
+type Encoder func(LookupRequest) any
+type Decoder func(body []byte) (Identity, error) // or ErrNotFound
+func New(vendor string, cfg VendorConfig, s Secrets, enc Encoder, dec Decoder) (*Client, error)
 ```
 
-Transient means: network error, timeout of a single attempt (not the parent context), 429,
-502, 503, 504. `Retry-After` is honoured up to `BackoffMax`. Everything else is permanent.
-A 401 from `/identity` invalidates the token cache and retries once with a fresh token.
+`abc.New(cfg, secrets)` and `xyz.New(cfg, secrets)` return a `*provider.Client`.
 
-Sentinels: `provider.ErrNotFound`, `provider.ErrInvalidRequest`, `provider.ErrUnauthorized`,
-`provider.ErrUnavailable`, `provider.ErrCircuitOpen`.
+**Lookup.**
+1. Validate the request: phone must normalise to E.164 (`profile.NormalizePhone`) and the name must be non-empty. Otherwise return `ErrInvalidRequest` without a vendor call.
+2. Get a token: cached, or fetched from `POST /auth` with credentials from `Secrets`.
+3. Call `POST /identity`. A 401 invalidates the token and retries with a fresh one, once per lookup (across retry attempts).
+4. Decode the response, normalise the phone to E.164 and the country to upper-case ISO 3166-1 alpha-2, and set `Provider`.
+
+| Vendor status | Result | Retried |
+|---|---|---|
+| 200 | decoded identity | |
+| 401 (after the one refresh), 403 | `ErrUnauthorized` | no |
+| 404 | `ErrNotFound` | no |
+| 400, 422 | `ErrInvalidRequest` | no |
+| 429, 502, 503, 504, network error, attempt timeout | `ErrUnavailable` once attempts run out | yes; `Retry-After` honoured up to `BackoffMax` |
+| other, malformed or over-1-MiB body | `ErrUnavailable` | no |
+| caller's context done | the context error | no |
+| breaker open | `ErrCircuitOpen` | no vendor call |
+
+`/auth` uses the same mapping, so bad credentials are an `ErrUnauthorized` and are never retried,
+except that a 400, 404 or 422 from `/auth` is `ErrUnavailable`: it isn't the lookup's "bad input" or "no match".
+The client follows no redirects. Errors carry the vendor, operation and status, never a request,
+a response body, a token, credentials or the secret store's error text.
+
+Sentinels: `ErrNotFound`, `ErrInvalidRequest`, `ErrUnauthorized`, `ErrUnavailable`, `ErrCircuitOpen`.
 
 ### 3.2 Vendor schemas
 
@@ -336,19 +363,19 @@ assume ABC uses it verbatim and XYZ differs:
 | | ABC | XYZ (assumed) |
 |---|---|---|
 | `POST /auth` request | `{"username","password"}` | same |
-| `POST /auth` response | `{"access_token","expires_in"}` | `{"access_token","expires_in"}` |
+| `POST /auth` response | `{"access_token","expires_in"}` | same |
 | `POST /identity` request | `{"phone","name"}` | same |
 | `POST /identity` response | `{"name","phone","address":{"street_address","locality","region","postal_code","country"}}` | `{"data":{"full_name","phone_number","address":{"line1","city","state","zip","country_code"}}}` |
-| not found | 404 | 200 with `{"data":null}` |
-
-`expires_in` missing → assume 5 minutes (configurable). Both adapters normalise phone to E.164 and
-country to ISO 3166-1 alpha-2 upper case.
+| not found | 404 | 200 with `{"data":null}` (a body with no `data` field is malformed) |
 
 ### 3.3 Fakes
 
-`abc/fake.go` and `xyz/fake.go` expose `httptest.Server`-backed fakes with knobs: fixed identities,
-token TTL, counters for `/auth` calls, and injectable failures (N× 503, 429 with `Retry-After`,
-401 on stale token, latency). They are used by adapter tests and the shared connector tests.
+`providertest.Fake` is one `httptest.Server` implementing the protocol. Its knobs are token TTL
+(or no `expires_in`), N injected statuses per endpoint (with `Retry-After`), latency on `/identity` and `/auth`,
+and counters for both endpoints. `abc.NewFake` and `xyz.NewFake` supply only their vendor's
+`/identity` body and not-found rule. The resilience tests run against both vendors; each vendor's
+`decode` is also tested against literal JSON, so a field-name mistake shared by an adapter and its
+fake still fails.
 
 The connector is a library. It is not exposed over HTTP by `cmd/server` because the brief does not
 ask for an endpoint; DESIGN.md describes where it would plug in.

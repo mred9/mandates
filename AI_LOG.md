@@ -112,3 +112,47 @@ and what a reviewer should double-check. Edit freely.
 
 **Copilot round 2**
 - Fixed: `uuid.Parse` skips the outer bytes of a 38-byte (braced) input without checking them, so `{<uuid>\x00` passed the malformed-ID check and reached PostgreSQL (500). `Get` and the search cursor now accept only the canonical lowercase form, which also gives SQLite and PostgreSQL the same answer for uppercase IDs. Tests failed first; verified on compose Postgres.
+
+---
+
+## Step Q3: Identity provider connector (issue #7, branch `7-q3-connector`)
+
+**Produced**
+- `internal/provider`: `IdentityProvider`, `Identity`, sentinels, `Secrets` (`StaticSecrets`, `VaultSecrets` stub), `VendorConfig` with defaults; `TokenCache` (early refresh, singleflight, `Invalidate(stale)`); `Breaker` and `Do` (per-attempt timeout, full-jitter retry on transient failures, `Retry-After` capped at `BackoffMax`); `Client`, the shared HTTP half (auth, 401 re-auth once, status mapping, https-only base URL, no redirects, 1 MiB body cap, normalisation).
+- `abc` and `xyz`: encode and decode only, plus thin fakes over the shared `providertest.Fake`.
+- Tests: every resilience test runs against both vendors; each `decode` is tested against literal JSON. 23 tests.
+- TDD: tests written against a compile-only skeleton and seen failing (19 tests) before the code. Teeth checks: removing singleflight, the stale-token check in `Invalidate`, breaker counting, the single half-open probe, `Retry-After`, the caller-cancel check, the 401 refresh, the body cap, the https check, the transient classification and the `/auth` 404 mapping each broke a test.
+- SPEC §3 as built, DESIGN Q3, README status and layout.
+
+**Assumptions**
+- At the user's direction: one shared fake with thin per-vendor fakes (not two full fakes); no fan-out or fallback across vendors (DESIGN describes it); #2 and #5 stay separate.
+- `POST /identity` is a read, so it is safe to retry.
+- The breaker counts lookups, not attempts, and only `ErrUnavailable` counts; not-found and bad-request answers reset it; the caller's own cancellation counts as neither.
+- Matching is by phone only in the fake; how a real vendor uses `name` is unknown.
+- An empty country in a vendor answer is allowed; a non-alpha-2 one is rejected as malformed.
+
+**Reviewer should double-check**
+- `TokenCache` runs the shared fetch under the first caller's context (DESIGN trade-off).
+- Bad credentials cost one `/auth` call per lookup, because `ErrUnauthorized` doesn't trip the breaker.
+- `Retry-After` as an HTTP date uses the wall clock, not `VendorConfig.Now`.
+
+**Pre-PR review (independent reviewer + security review)**
+- Security review: no findings.
+- Fixed:
+  - AC6 and AC7 had untested clauses: the breaker test now includes a vendor 400 (it must not count), and a test reads credentials under a `SecretName` different from the vendor name. Both were checked by breaking the line they guard.
+  - `Retry-After` below `BackoffMax` is now tested as waited in full, not just capped.
+  - Exhausted retries on attempt timeouts also matched `context.DeadlineExceeded`, so they read as the caller's timeout; the last error is now included as text only. Test failed first.
+  - XYZ read a 200 body without a `data` field (`{}`, `{"error":...}`) as "no match"; it is now malformed. Test failed first.
+  - The token cache checks again inside the shared fetch, so a caller arriving just after a refresh doesn't start a second `/auth`.
+  - A non-alpha-2 country from a vendor is now tested as rejected; the breaker test checks that a success really closes it.
+  - Doc wording in SPEC §3, DESIGN and the fake.
+- Deferred to #8: waiters on a shared token fetch ignore their own context; reuse a still-valid token when an early refresh fails; a second half-open probe in a narrow race; an XYZ 404 counting as "no match".
+- Dropped: `fmt` printing of the redacting types (same as `profile.Profile`, nothing prints them); fakes in the adapter packages (planned in SPEC); negative config values (operator config only).
+
+**Copilot round 1**
+- Fixed: the one re-auth on a 401 reset on every retry attempt, so `401, 503, 401` re-authenticated twice instead of returning `ErrUnauthorized`; it is now once per lookup. Test failed first.
+- Fixed: the 1 MiB cap only truncated, so a valid answer padded past 1 MiB with whitespace was accepted; over-limit answers are now rejected explicitly (restoring the check I had removed as redundant). Test failed first.
+- Docs: `Timeout` covers a whole attempt (token fetch, `/identity`, re-auth), not each HTTP request; that bounds an attempt's total time, so the docs now say so rather than the code changing.
+
+**Copilot round 2 (at the user's direction)**
+- Fixed: a `Secrets` error was passed through as text, so a real Vault client whose error quotes a token would put it in lookup errors and logs. I first deferred it (no current implementation leaks); the user judged the consequence of forgetting too high. It is now a fixed "credentials unavailable" error; a store that hits the attempt timeout still returns the context error, so the attempt is retried. Test failed first; both branches checked by breaking them.

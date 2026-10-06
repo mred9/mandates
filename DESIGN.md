@@ -214,4 +214,114 @@ SIGTERM so in-flight reads finish during a deploy.
 
 ## Q3: Identity provider connector
 
-*To be written in step Q3.*
+### Shape
+
+```
+caller ─▶ abc.New / xyz.New ─▶ provider.Client.Lookup
+                                 │ validate (E.164 phone, name)        ─▶ ErrInvalidRequest, no call
+                                 │ Do: breaker ─▶ attempt (timeout) ─▶ retry transient (jitter, Retry-After)
+                                 │      └─ TokenCache ─▶ POST /auth (creds from Secrets), singleflight
+                                 │      └─ POST /identity ─▶ 401? invalidate, re-auth, once more
+                                 │ decode (vendor package) ─▶ normalise phone + country
+                                 ▼
+                              provider.Identity
+```
+
+### Decisions
+
+**One client, thin adapters.** Authentication, token caching, retries, the breaker and status
+mapping are the same for every vendor, so `provider.Client` does them once. A vendor package
+supplies two functions: encode a request and decode a 200 answer (including its own way of saying
+"no match"). ABC and XYZ are about 50 lines each, and adding vendor three means writing those two
+functions and a fake. The alternative, each adapter owning its own retry and token logic, gives
+two copies that drift.
+
+**Tokens are cached, refreshed early, fetched once.** A token is reused until it is within
+`RefreshBefore` (30s) of expiry, so a lookup never starts with a token about to die in flight.
+When it does need a new one, concurrent lookups share a single `/auth` call (`singleflight`).
+Without that, a burst after expiry sends one `/auth` per request, which is exactly the traffic
+vendors throttle or lock accounts over. A missing `expires_in` assumes 5 minutes.
+
+**A 401 means the token went stale, once.** The vendor may revoke a token before its stated
+expiry. On a 401 from `/identity` the client drops that token and retries once with a fresh one.
+A second 401 is a real authorization failure and is returned, not retried. `Invalidate(stale)`
+only drops the token if it is still the cached one, so a slow request that gets a 401 can't throw
+away the token another request has just fetched (`TestInvalidateKeepsANewerToken`).
+
+**Retry only what can succeed next time.** Transient means a network error, an attempt that hit
+its own timeout, 429, 502, 503 or 504. Everything else (400, 404, 401 after the refresh, other 5xx,
+a malformed answer) returns at once: retrying a bad request just repeats it. Backoff is full
+jitter (random up to `BackoffBase·2ⁿ`, capped at `BackoffMax`), so clients that failed together
+don't retry together. A `Retry-After` from the vendor wins, but is capped at `BackoffMax`: a
+vendor saying "come back in an hour" shouldn't hold a caller's request for an hour.
+
+**Two deadlines.** Each attempt has its own `Timeout`, so one hung connection costs one attempt,
+not the whole lookup. The timeout covers everything in the attempt (a token fetch, `/identity`,
+a re-auth), which bounds an attempt's total time rather than each request's. The caller's context bounds everything: once it is done the client stops,
+returns the caller's error rather than `ErrUnavailable`, and doesn't count it against the vendor.
+
+**A circuit breaker per vendor.** After `BreakerThreshold` consecutive failed lookups the breaker
+opens and lookups fail fast with `ErrCircuitOpen` for `BreakerCooldown`. Then exactly one probe
+goes through: success closes the breaker, failure opens it again. This stops us adding load to a
+vendor that is already down, and stops our callers waiting out timeouts and retries on every request.
+Only `ErrUnavailable` counts as a failure. A "not found" or "bad request" is a healthy vendor
+answering, and resets the count. The breaker counts lookups, not attempts, so one lookup that
+retried three times is one failure.
+
+**Secrets come from a secrets store, and go nowhere else.** Vendor credentials are read through
+`Secrets` by name. `VaultSecrets` is the production shape: kv-v2 at `secret/data/idp/<vendor>`,
+read with the service's own Vault identity, so credentials are never in config, env or the image,
+and rotating them is a Vault write. `Credentials`, `Token`, `LookupRequest` and `Identity` all
+redact themselves when logged. Errors carry the vendor, the operation and the status, never a
+request, a response body, a token or a password: a JSON decode error, for instance, is replaced
+with a fixed "malformed response" because it can quote the body, and a secret store's error is
+replaced with "credentials unavailable" because a Vault error can quote a token or path. A test collects the errors from
+the main failure paths (bad credentials, exhausted retries, bad request, rejected token, no match,
+oversized answer) and checks none contains the password, a token, the phone or the name.
+
+**Trust the vendor's transport, not its answers.**
+- The base URL must be `https` (plain `http` only to a loopback host, for the fakes).
+- The client follows no redirects, so credentials and tokens only ever go to the configured host.
+- Answers are read up to 1 MiB; a longer one is cut off and fails as malformed.
+- Each answer is normalised to our formats (E.164 phone, upper-case ISO 3166-1 alpha-2 country).
+  One that won't normalise is rejected rather than passed on.
+
+**Testing against fakes, both vendors.** `providertest.Fake` implements the protocol and its
+failure modes (stale tokens, N×503, 429 with `Retry-After`, latency); each vendor's fake only
+writes its own response body. Every resilience test runs against both vendors, so each adapter's
+wiring is covered, not just the shared client. Each `decode` is also tested against literal JSON,
+because a fake built from the adapter's own types would agree with a wrong field name.
+
+**Where it plugs in.** The brief asks for no endpoint, so the connector is a library. The natural
+caller is a verification or onboarding service: look up the person's identity at a vendor, compare
+it with what they entered, and store the result through `profile.Repository`. That service, not
+the connector, decides what to do with vendor PII: whether to keep it, and under which consent.
+Calls should run in a background job or behind their own timeout, because a vendor lookup can take
+several seconds under retries.
+
+### Trade-offs I accepted
+
+- **Retrying `POST /identity`.** It is a lookup, so it is safe to repeat, but some vendors bill
+  per call: a retried request may be charged twice.
+- **The shared token fetch runs under the first caller's context.** If that caller gives up, the
+  callers waiting on the same fetch get its error too and retry. A detached context with its own
+  timeout avoids that; for a token fetch that takes milliseconds it wasn't worth the code.
+- **Bad credentials cost one `/auth` call per lookup.** `ErrUnauthorized` isn't a breaker
+  failure, so a revoked password keeps trying. A real version would back off on auth failures,
+  or alert, since only an operator can fix it.
+- **No caching of identities.** Each lookup goes to the vendor. Caching vendor PII is a retention
+  decision, not a performance one.
+- **XYZ's schema is invented** (SPEC §3.2). If both vendors really share the brief's schema, the
+  two adapters collapse into one with a vendor name.
+
+### With more time
+
+- Contract tests against each vendor's sandbox. The fakes encode my reading of the vendor; only
+  the real API can prove it.
+- Fallback or hedging across vendors (try ABC, fall back to XYZ when the breaker is open), and
+  comparing their answers for fraud signals.
+- `VaultSecrets` for real, re-reading credentials when the lease rotates and on an auth failure.
+- A client-side rate limit matching each vendor's quota, so we get 429s less often.
+- Metrics per vendor (latency, outcome, breaker state, retries) and alerting on the breaker opening.
+- mTLS or request signing where a vendor supports it; libphonenumber and a real country list for
+  normalisation.
