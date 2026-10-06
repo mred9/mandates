@@ -167,3 +167,14 @@ and what a reviewer should double-check. Edit freely.
 
 **Reviewer should double-check**
 - That a 404 from XYZ means "wrong place" follows from XYZ's assumed schema (SPEC §3.2), not from a real vendor contract.
+
+---
+
+## Follow-up: access-log a request that panics (issue #12, branch `12-access-log-on-panic`)
+
+**Produced**
+- Middleware order is now request ID → access log → recover → mux, so the 500 that `recover` writes goes through the access log's status writer. SPEC §2.3 and the DESIGN Q2 chain match.
+- `TestPanicIsAccessLogged`: one access-log line with status 500, the route pattern and the request ID. It failed before the swap.
+
+**Reviewer should double-check**
+- An `http.ErrAbortHandler` panic is re-raised by `recover` and still gets no access-log line; the server aborts that response on purpose.
