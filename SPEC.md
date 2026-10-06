@@ -326,7 +326,8 @@ func Do(ctx context.Context, cfg VendorConfig, b *Breaker, call func(ctx context
 // Client is the IdentityProvider. A vendor package supplies only enc and dec.
 type Encoder func(LookupRequest) any
 type Decoder func(body []byte) (Identity, error) // or ErrNotFound
-func New(vendor string, cfg VendorConfig, s Secrets, enc Encoder, dec Decoder) (*Client, error)
+// notFound is the status the vendor says "no match" with, or 0 if it says so in a 200 body.
+func New(vendor string, notFound int, cfg VendorConfig, s Secrets, enc Encoder, dec Decoder) (*Client, error)
 ```
 
 `abc.New(cfg, secrets)` and `xyz.New(cfg, secrets)` return a `*provider.Client`.
@@ -341,10 +342,10 @@ func New(vendor string, cfg VendorConfig, s Secrets, enc Encoder, dec Decoder) (
 |---|---|---|
 | 200 | decoded identity | |
 | 401 (after the one refresh), 403 | `ErrUnauthorized` | no |
-| 404 | `ErrNotFound` | no |
+| the vendor's `notFound` status (ABC: 404) | `ErrNotFound` | no |
 | 400, 422 | `ErrInvalidRequest` | no |
 | 429, 502, 503, 504, network error, attempt timeout | `ErrUnavailable` once attempts run out | yes; `Retry-After` honoured up to `BackoffMax` |
-| other, malformed or over-1-MiB body | `ErrUnavailable` | no |
+| other (including a 404 from XYZ), malformed or over-1-MiB body | `ErrUnavailable` | no |
 | caller's context done | the context error | no |
 | breaker open | `ErrCircuitOpen` | no vendor call |
 
@@ -366,7 +367,7 @@ assume ABC uses it verbatim and XYZ differs:
 | `POST /auth` response | `{"access_token","expires_in"}` | same |
 | `POST /identity` request | `{"phone","name"}` | same |
 | `POST /identity` response | `{"name","phone","address":{"street_address","locality","region","postal_code","country"}}` | `{"data":{"full_name","phone_number","address":{"line1","city","state","zip","country_code"}}}` |
-| not found | 404 | 200 with `{"data":null}` (a body with no `data` field is malformed) |
+| not found | 404 | 200 with `{"data":null}` (a body with no `data` field is malformed; a 404 is `ErrUnavailable`) |
 
 ### 3.3 Fakes
 

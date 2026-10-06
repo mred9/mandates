@@ -156,3 +156,14 @@ and what a reviewer should double-check. Edit freely.
 
 **Copilot round 2 (at the user's direction)**
 - Fixed: a `Secrets` error was passed through as text, so a real Vault client whose error quotes a token would put it in lookup errors and logs. I first deferred it (no current implementation leaks); the user judged the consequence of forgetting too high. It is now a fixed "credentials unavailable" error; a store that hits the attempt timeout still returns the context error, so the attempt is retried. Test failed first; both branches checked by breaking them.
+
+---
+
+## Follow-up: an XYZ 404 is not "no match" (issue #21, branch `21-xyz-404-not-no-match`)
+
+**Produced**
+- `provider.New` takes the vendor's "no match" status: 404 for ABC, 0 for XYZ (which answers `{"data":null}`). Any other 404 is `ErrUnavailable`, so a wrong base path opens the breaker instead of answering "no match". The `/auth` not-found remap it made redundant is gone.
+- Tests: the permanent-failure test expects a 404 per vendor, and a new test opens XYZ's breaker on 404s. Both failed first, and the mapping was broken once to check they catch it.
+
+**Reviewer should double-check**
+- That a 404 from XYZ means "wrong place" follows from XYZ's assumed schema (SPEC §3.2), not from a real vendor contract.

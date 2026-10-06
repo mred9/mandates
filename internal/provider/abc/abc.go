@@ -3,6 +3,7 @@ package abc
 
 import (
 	"encoding/json"
+	"net/http"
 
 	"github.com/mred9/mandates/internal/provider"
 )
@@ -29,7 +30,7 @@ type response struct {
 }
 
 func New(cfg provider.VendorConfig, s provider.Secrets) (*provider.Client, error) {
-	return provider.New(Name, cfg, s, encode, decode)
+	return provider.New(Name, http.StatusNotFound, cfg, s, encode, decode)
 }
 
 func encode(r provider.LookupRequest) any { return request{r.Phone, r.Name} }

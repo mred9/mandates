@@ -35,7 +35,7 @@ type response struct {
 }
 
 func New(cfg provider.VendorConfig, s provider.Secrets) (*provider.Client, error) {
-	return provider.New(Name, cfg, s, encode, decode)
+	return provider.New(Name, 0, cfg, s, encode, decode) // "no match" is {"data": null}, so a 404 is not
 }
 
 func encode(r provider.LookupRequest) any { return request{r.Phone, r.Name} }
