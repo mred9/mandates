@@ -12,23 +12,23 @@ is a deliberately small proof of concept.
 
 **AI.** I built this with [Claude Code](https://claude.com/claude-code) running Claude Opus 5.5,
 which wrote the plans, code, tests and docs under my direction and review. GitHub Copilot reviewed
-each pull request. AI_LOG.md records what the AI produced at each step, the assumptions it made and
+each pull request. [AI_LOG.md](AI_LOG.md) records what the AI produced at each step, the assumptions it made and
 what to double-check.
 
 **Workflow.** The work ran through my own agentic development workflow (dgv-session), a Claude
 Code plugin. Its key principles:
 
-- Every change starts from a GitHub issue with testable acceptance criteria.
+- Every non-trivial change starts from a GitHub issue with testable acceptance criteria.
 - The AI writes a plan, then stops once for my approval before any code.
-- Test-driven: a failing test first, and each new test is shown to catch the bug it guards.
+- Test-driven: a failing test first, and each new test is shown to fail when the code it guards breaks.
 - An independent reviewer, in a fresh context, checks the whole diff before the PR opens.
 - Automated PR review is answered comment by comment, with a cap on fix rounds.
-- Every finding is fixed, filed as its own issue, or dropped with a reason; none is ignored.
-- Only I merge.
+- Every review finding is fixed, filed as an issue, or dropped with a reason; none is ignored.
+- I review and merge every PR; the AI doesn't merge.
 
 **Tooling.** Go 1.27.1 (pinned with [mise](https://mise.jdx.dev)); Docker Compose for PostgreSQL 17
 and CockroachDB; GitHub Actions CI running `go vet` and race tests on all three databases; CodeQL
-code scanning.
+code scanning (GitHub default setup).
 
 **Frameworks.** None beyond the standard library (`net/http`, `log/slog`, `database/sql`,
 `testing`). Six modules cover the database drivers, argon2id, rate limiting, singleflight and

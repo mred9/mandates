@@ -189,3 +189,6 @@ and what a reviewer should double-check. Edit freely.
 
 **Assumptions**
 - The model is the user's statement (Opus 5.5 throughout). That Copilot reviewed each PR was checked on PRs #3, #6 and #9.
+
+**Reviewer should double-check**
+- The workflow principles are a one-line summary of the dgv-session skill; trivial changes skip the issue and approval stop, which the README's "non-trivial" covers.
