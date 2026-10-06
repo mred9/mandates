@@ -268,8 +268,8 @@ Only `ErrUnavailable` counts as a failure. A "not found" or "bad request" is a h
 answering, and resets the count. The breaker counts lookups, not attempts, so one lookup that
 retried three times is one failure. "Not found" means the vendor's own no-match answer: a 404 from
 ABC, `{"data":null}` from XYZ. A 404 from XYZ means we are calling the wrong place (a bad base
-path, a removed endpoint), so it is `ErrUnavailable` and opens the breaker instead of telling
-every caller "no match".
+path, a removed endpoint), so it is `ErrUnavailable` and counts toward opening the breaker
+instead of telling every caller "no match".
 
 **Secrets come from a secrets store, and go nowhere else.** Vendor credentials are read through
 `Secrets` by name. `VaultSecrets` is the production shape: kv-v2 at `secret/data/idp/<vendor>`,
