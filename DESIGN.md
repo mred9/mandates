@@ -148,8 +148,8 @@ request isn't cacheable, which PII responses shouldn't be anyway (`Cache-Control
 response).
 
 **One 404 for "doesn't exist" and "malformed".** Distinct answers would let a caller probe which IDs
-exist and learn the ID format. `Repository.Get` returns `ErrNotFound` for anything that isn't a UUID
-before touching the store (PostgreSQL would otherwise reject `%FF` as invalid UTF-8 with an error, a
+exist and learn the ID format. `Repository.Get` returns `ErrNotFound` for anything that isn't a canonical
+lowercase UUID before touching the store (PostgreSQL would otherwise reject `%FF` as invalid UTF-8 with an error, a
 500), so the handler has one path; a test compares the bodies byte for byte.
 
 **OAuth2 bearer tokens with scopes, behind an interface.** Callers are services, so this is the

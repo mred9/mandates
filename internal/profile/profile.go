@@ -120,7 +120,7 @@ func (r *Repository) Create(ctx context.Context, p Profile) (Profile, error) {
 func (r *Repository) Get(ctx context.Context, id string) (Profile, error) {
 	// A malformed ID can't exist. Checking here gives every store the same
 	// answer; PostgreSQL would otherwise reject invalid UTF-8 with an error.
-	if _, err := uuid.Parse(id); err != nil {
+	if !canonicalID(id) {
 		return Profile{}, fmt.Errorf("profile: get: %w", ErrNotFound)
 	}
 	s, err := r.store.Get(ctx, id)
@@ -143,7 +143,7 @@ func (r *Repository) Search(ctx context.Context, phone, after string, limit int)
 	if limit < 1 || limit > MaxPageSize {
 		return nil, fmt.Errorf("%w: limit must be 1..%d", ErrInvalid, MaxPageSize)
 	}
-	if _, err := uuid.Parse(after); after != "" && err != nil {
+	if after != "" && !canonicalID(after) {
 		return nil, fmt.Errorf("%w: malformed cursor", ErrInvalid)
 	}
 	rows, err := r.store.FindByPhoneIndex(ctx, r.index.Sum(phone), after, limit)
@@ -192,6 +192,14 @@ func (r *Repository) open(ctx context.Context, s Sealed) (Profile, error) {
 		return Profile{}, fmt.Errorf("profile: address: %w", err)
 	}
 	return p, nil
+}
+
+// canonicalID accepts only the lowercase 36-character form IDs are stored in.
+// uuid.Parse alone also takes braced, URN and uppercase forms, and ignores the
+// bytes around a braced one, so "{<uuid>\x00" would reach the store.
+func canonicalID(s string) bool {
+	u, err := uuid.Parse(s)
+	return err == nil && u.String() == s
 }
 
 // aad binds a ciphertext to its row and column.

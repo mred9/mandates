@@ -203,7 +203,8 @@ was full.
 | anything else, including a panic | 500 | `internal` (details logged, not returned) |
 
 Malformed and non-existent IDs return byte-identical 404 bodies (apart from `request_id`):
-`profile.Repository.Get` returns `ErrNotFound` for anything that isn't a UUID without calling the store.
+`profile.Repository.Get` returns `ErrNotFound` for anything that isn't a canonical lowercase UUID
+without calling the store; `page_token` must decode to one too.
 `internal/api/errors.go` is the only place errors become statuses.
 
 ### 2.2 Auth

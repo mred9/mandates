@@ -220,7 +220,7 @@ func (*strictStore) Get(context.Context, string) (Sealed, error) {
 func TestGetMalformedIDIsNotFoundWithoutTheStore(t *testing.T) {
 	repo, _ := newRepo(t)
 	repo.store = &strictStore{}
-	for _, id := range []string{"not-a-uuid", "\xff", "a\x00b", ""} {
+	for _, id := range []string{"not-a-uuid", "\xff", "a\x00b", "", "{0192f2c4-0000-7000-8000-000000000000\x00", "{0192f2c4-0000-7000-8000-000000000000\xff"} {
 		if _, err := repo.Get(context.Background(), id); !errors.Is(err, ErrNotFound) {
 			t.Errorf("Get(%q) = %v, want ErrNotFound", id, err)
 		}

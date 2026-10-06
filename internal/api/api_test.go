@@ -214,6 +214,7 @@ func TestSearchRejectsBadInput(t *testing.T) { // AC3
 		"negative page size":  `{"phone":"+15551234567","page_size":-1}`,
 		"token not base64":    `{"phone":"+15551234567","page_token":"!!!"}`,
 		"token not an ID":     `{"phone":"+15551234567","page_token":"` + base64.RawURLEncoding.EncodeToString([]byte("x")) + `"}`,
+		"token a wrapped ID":  `{"phone":"+15551234567","page_token":"` + base64.RawURLEncoding.EncodeToString([]byte("{0192f2c4-0000-7000-8000-000000000000\x00")) + `"}`,
 		"body over 16 KiB":    strings.Repeat(" ", 17<<10) + `{"phone":"+15551234567"}`, // valid apart from its size
 	} {
 		t.Run(name, func(t *testing.T) {

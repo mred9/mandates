@@ -109,3 +109,6 @@ and what a reviewer should double-check. Edit freely.
 **Copilot round 1**
 - Fixed: `SlogAuditor.Record` always returned nil (`Logger.Info` drops write errors), so the production auditor could not fail closed. It now writes through the handler and returns its error; a test with a failing writer was seen failing first.
 - Fixed: the page-token test checked for `555`, which a UUIDv7 can contain; it now checks the token is exactly the last returned ID.
+
+**Copilot round 2**
+- Fixed: `uuid.Parse` skips the outer bytes of a 38-byte (braced) input without checking them, so `{<uuid>\x00` passed the malformed-ID check and reached PostgreSQL (500). `Get` and the search cursor now accept only the canonical lowercase form, which also gives SQLite and PostgreSQL the same answer for uppercase IDs. Tests failed first; verified on compose Postgres.
