@@ -25,8 +25,11 @@ type Auditor interface {
 // TODO: production ships these to an append-only store, separate from app logs.
 type SlogAuditor struct{ Logger *slog.Logger }
 
+// Record writes through the handler directly: Logger.Info drops write errors,
+// and an audit write that fails silently would defeat failing closed.
 func (a SlogAuditor) Record(ctx context.Context, e AuditEvent) error {
-	a.Logger.InfoContext(ctx, "audit", "event_time", e.Time, "request_id", e.RequestID, "client_id", e.ClientID,
+	r := slog.NewRecord(time.Now(), slog.LevelInfo, "audit", 0)
+	r.Add("event_time", e.Time, "request_id", e.RequestID, "client_id", e.ClientID,
 		"action", e.Action, "subject_ids", e.SubjectIDs, "outcome", e.Outcome)
-	return nil
+	return a.Logger.Handler().Handle(ctx, r)
 }

@@ -188,9 +188,9 @@ func TestSearch(t *testing.T) { // AC2
 		if token = res.NextPageToken; token == "" {
 			break
 		}
-		raw, _ := base64.RawURLEncoding.DecodeString(token)
-		if strings.Contains(string(raw), "555") {
-			t.Errorf("page token carries the phone: %q", raw)
+		// The token is the last returned ID and nothing else, so it carries no PII.
+		if raw, _ := base64.RawURLEncoding.DecodeString(token); string(raw) != res.Items[len(res.Items)-1].ID {
+			t.Errorf("page token %q is not the last returned ID", raw)
 		}
 	}
 	if !slices.Equal(got, want) {
@@ -379,5 +379,20 @@ func TestUnknownRouteUsesEnvelope(t *testing.T) {
 	}
 	if w := f.do("GET", "/healthz", "", "Authorization", ""); w.Code != 200 || w.Header().Get("Cache-Control") != "no-store" {
 		t.Errorf("healthz: %d, Cache-Control %q", w.Code, w.Header().Get("Cache-Control"))
+	}
+}
+
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+
+func TestSlogAuditorReportsWriteFailure(t *testing.T) { // AC6
+	var buf bytes.Buffer
+	e := AuditEvent{Time: time.Now(), RequestID: "r1", ClientID: "app", Action: "profile.get", SubjectIDs: []string{"id-1"}, Outcome: "returned"}
+	if err := (SlogAuditor{Logger: NewLogger(&buf)}).Record(context.Background(), e); err != nil || !strings.Contains(buf.String(), `"subject_ids":["id-1"]`) {
+		t.Fatalf("Record = %v: %s", err, buf.String())
+	}
+	if err := (SlogAuditor{Logger: NewLogger(failWriter{})}).Record(context.Background(), e); err == nil {
+		t.Error("a failed audit write must return an error, so handlers fail closed")
 	}
 }

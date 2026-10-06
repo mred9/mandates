@@ -105,3 +105,7 @@ and what a reviewer should double-check. Edit freely.
   - The internal-error test no longer uses a password-shaped marker.
 - Verified `cmd/server -db postgres` against compose Postgres (start, get, search, SIGTERM).
 - Deferred to #5: access log on panic, `-rate` validation, second-signal exit, per-request timeout, server-side audit request ID, `SlogAuditor` test, 403 `WWW-Authenticate`.
+
+**Copilot round 1**
+- Fixed: `SlogAuditor.Record` always returned nil (`Logger.Info` drops write errors), so the production auditor could not fail closed. It now writes through the handler and returns its error; a test with a failing writer was seen failing first.
+- Fixed: the page-token test checked for `555`, which a UUIDv7 can contain; it now checks the token is exactly the last returned ID.
